@@ -1021,9 +1021,13 @@
         if (!res.ok) { showStatus(data.error || "Failed to resolve holders.", "danger"); return; }
         const resolved = (data.files || [])[0];
         if (resolved) {
+          const holderUuids = [...document.querySelectorAll(".ma-holder-uuid")]
+            .map(el => el.value.trim()).filter(Boolean);
+          const parentSample = holderUuids.length === 1 ? holderUuids[0] : holderUuids;
           _maAssignments.forEach(fileObj => {
             fileObj.samples = resolved.samples.map(s => ({...s}));
             fileObj.source = 'holders';
+            fileObj.parent_sample = parentSample;
           });
           _buildNirvanaTabs();
         }
@@ -1169,7 +1173,8 @@
         file: fileObj.path,
         sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
         excluded_uuids: fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean),
-        link_samples: fileObj.source === 'holders',
+        link_samples: false,
+        parent_sample: fileObj.parent_sample || null,
       }));
 
       const payload = {

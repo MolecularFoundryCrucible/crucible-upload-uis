@@ -85,9 +85,16 @@
       const inputAttrs = readonly
         ? 'readonly style="background:#e9ecef;"'
         : `onchange="_maAssignments[0] && (_maAssignments[0].samples[${i}].uuid = this.value)"`;
+      const nameCell = readonly
+        ? `<td class="small"><div class="d-flex justify-content-between align-items-center gap-1">
+             <span class="text-truncate" style="max-width:140px;" title="${s.name}">${s.name || '—'}</span>
+             <button type="button" class="btn-close flex-shrink-0" style="font-size:0.6rem;"
+                     onclick="xrdRemoveChildRow(${i})" title="Remove this sample from upload"></button>
+           </div></td>`
+        : `<td class="small text-truncate" style="max-width:160px;" title="${s.name}">${s.name || '—'}</td>`;
       tr.innerHTML = `
         <td class="text-muted small font-monospace">${s.position}</td>
-        <td class="small text-truncate" style="max-width:160px;" title="${s.name}">${s.name || '—'}</td>
+        ${nameCell}
         <td><input type="text" class="form-control form-control-sm font-monospace"
              value="${s.uuid}" ${inputAttrs} /></td>`;
       tbody.appendChild(tr);
@@ -95,6 +102,12 @@
     document.getElementById('xrd-empty-msg').classList.add('d-none');
     document.getElementById('xrd-assignment-area').classList.remove('d-none');
   }
+
+  window.xrdRemoveChildRow = function (i) {
+    if (!_maAssignments.length) return;
+    _maAssignments[0].samples.splice(i, 1);
+    _xrdRenderRows(_maAssignments[0].samples, /*readonly=*/true);
+  };
 
   function _xrdRenderSingleRows() {
     // One row per file entry, each with its own UUID input

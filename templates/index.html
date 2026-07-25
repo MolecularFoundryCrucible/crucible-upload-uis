@@ -1184,7 +1184,7 @@
         file: fileObj.path,
         sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
         excluded_uuids: fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean),
-        link_samples: false,
+        link_samples: !!fileObj.link_samples,
         parent_sample: fileObj.parent_sample || null,
       }));
 

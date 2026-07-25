@@ -58,6 +58,23 @@ start.bat
 
 Both scripts set `PREFECT_API_URL=http://127.0.0.1:4200/api`, start the Prefect server, wait for it to come up, start `serve_flows.py`, then run the Flask app in the foreground. The Prefect UI is available at http://127.0.0.1:4200 for monitoring flow runs.
 
+### Windows Desktop Shortcut (optional)
+
+To launch the app by double-clicking an icon on the Windows desktop:
+
+1. Open PowerShell **in the repo folder** (Shift + right-click in the folder → "Open PowerShell window here")
+2. Run the setup script:
+```
+.\create_shortcut.ps1
+```
+3. A **Crucible Upload** shortcut with the Crucible icon appears on your desktop.
+
+> If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` first, then retry.
+
+The shortcut points to `CrucibleUploader.vbs`, which starts the full app (Prefect server, flow worker, and Flask UI) with no console window. Re-run `create_shortcut.ps1` if you move the repo to a different folder — no need to redo it after pulling updates.
+
+If you prefer to see server logs while the app runs, point the shortcut at `launch.bat` instead (right-click shortcut → Properties → change Target path to `launch.bat`).
+
 ### Additional Details (potentially outdated)
 - instrument_conf.py allows configuration of instrument specific details that may be helpful:
     - `DEFAULT_BROWSE_DIR` will set the default directory for the file/folder picker.

@@ -1039,6 +1039,10 @@
     }
 
     function _clearNirvanaUI() {
+      if ((window._instrumentPanelClearers || {})[document.getElementById('instrument').value]) {
+        window._instrumentPanelClearers[document.getElementById('instrument').value]();
+        return;
+      }
       _maAssignments = [];
       document.getElementById("ma-tabs").innerHTML = "";
       document.getElementById("ma-tabs").classList.add("d-none");
@@ -1047,6 +1051,9 @@
     }
 
     async function parseAssignmentFiles(instrument, paths) {
+      const customParser = (window._instrumentPanelParsers || {})[instrument];
+      if (customParser) { await customParser(paths); return; }
+
       _clearNirvanaUI();
       if (!paths.length) return;
 
@@ -1072,6 +1079,10 @@
     }
 
     function _buildNirvanaTabs() {
+      if ((window._instrumentPanelBuilders || {})[document.getElementById('instrument').value]) {
+        window._instrumentPanelBuilders[document.getElementById('instrument').value]();
+        return;
+      }
       const tabList = document.getElementById("ma-tabs");
       const tabContent = document.getElementById("ma-tab-content");
       tabList.innerHTML = "";

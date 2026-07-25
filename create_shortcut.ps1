@@ -4,7 +4,7 @@
 $repoDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 $iconPath  = Join-Path $repoDir "crucible.ico"
-$vbsPath   = Join-Path $repoDir "launch_silent.vbs"
+$vbsPath   = Join-Path $repoDir "CrucibleUploader.vbs"
 $wscript   = "C:\Windows\System32\wscript.exe"
 $desktop   = [Environment]::GetFolderPath("Desktop")
 $lnkPath   = Join-Path $desktop "Crucible Upload.lnk"
@@ -16,7 +16,7 @@ Write-Host "Icon path: $iconPath"
 $shell    = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($lnkPath)
 $shortcut.TargetPath       = $wscript
-$shortcut.Arguments        = "`"$vbsPath`""
+$shortcut.Arguments        = '"' + $vbsPath + '"'
 $shortcut.WorkingDirectory = $repoDir
 $shortcut.IconLocation     = $iconPath
 $shortcut.Description      = "Launch Crucible Upload UI"

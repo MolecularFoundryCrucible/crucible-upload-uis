@@ -1,0 +1,254 @@
+<div class="card h-100 shadow-sm" style="border-top-color: #6f42c1;">
+  <div class="card-body d-flex flex-column">
+    <div class="d-flex align-items-center justify-content-between mb-2">
+      <h5 class="card-title mb-0" style="color:#6f42c1;">XRD Assignment</h5>
+      <span id="xrd-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
+    </div>
+
+    <!-- Mode selector -->
+    <div class="btn-group btn-group-sm mb-3" role="group">
+      <input type="radio" class="btn-check" name="xrd-mode" id="xrd-mode-single" value="single" checked autocomplete="off"
+             onchange="xrdOnModeChange()">
+      <label class="btn btn-outline-secondary" for="xrd-mode-single">Single Sample</label>
+      <input type="radio" class="btn-check" name="xrd-mode" id="xrd-mode-file" value="file" autocomplete="off"
+             onchange="xrdOnModeChange()">
+      <label class="btn btn-outline-secondary" for="xrd-mode-file">From File</label>
+      <input type="radio" class="btn-check" name="xrd-mode" id="xrd-mode-parent" value="parent" autocomplete="off"
+             onchange="xrdOnModeChange()">
+      <label class="btn btn-outline-secondary" for="xrd-mode-parent">From Parent</label>
+    </div>
+
+    <!-- From Parent: parent UUID input + resolve -->
+    <div id="xrd-parent-fields" class="d-none mb-3">
+      <label class="form-label small fw-semibold">Parent Sample UUID</label>
+      <div class="input-group input-group-sm">
+        <input id="xrd-parent-uuid" type="text" class="form-control font-monospace"
+               placeholder="Parent sample UUID" />
+        <button class="btn btn-outline-secondary" type="button" onclick="xrdResolveParent()">
+          <span id="xrd-spinner-resolve" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
+          Resolve
+        </button>
+      </div>
+      <div id="xrd-parent-file-row" class="d-none mt-2">
+        <small class="text-muted">File: <span id="xrd-parent-file-name" class="font-monospace">—</span></small>
+        <small class="text-muted d-block">Use the Browse button below to select the combined XRD file.</small>
+      </div>
+    </div>
+
+    <p id="xrd-empty-msg" class="text-muted small">Browse and select file(s) below to load assignments.</p>
+
+    <!-- Assignment area -->
+    <div id="xrd-assignment-area" class="d-none flex-grow-1 overflow-auto">
+      <table class="table table-sm table-bordered align-middle mb-0">
+        <thead class="table-light" id="xrd-thead">
+          <tr>
+            <th style="width:60px;">Pos.</th>
+            <th>Name</th>
+            <th>Sample UUID</th>
+          </tr>
+        </thead>
+        <tbody id="xrd-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  window._instrumentPanelBuilders = window._instrumentPanelBuilders || {};
+  window._instrumentPanelClearers = window._instrumentPanelClearers || {};
+  window._instrumentPanelParsers  = window._instrumentPanelParsers  || {};
+
+  function _xrdMode() {
+    const el = document.querySelector('input[name="xrd-mode"]:checked');
+    return el ? el.value : 'single';
+  }
+
+  function _xrdClear() {
+    _maAssignments = [];
+    document.getElementById('xrd-rows').innerHTML = '';
+    document.getElementById('xrd-assignment-area').classList.add('d-none');
+    const msg = document.getElementById('xrd-empty-msg');
+    msg.classList.remove('d-none');
+    msg.textContent = _xrdMode() === 'parent'
+      ? 'Enter a parent UUID above and click Resolve, then browse a file below.'
+      : 'Browse and select file(s) below to load assignments.';
+    document.getElementById('xrd-parent-file-row').classList.add('d-none');
+    document.getElementById('xrd-parent-file-name').textContent = '—';
+  }
+
+  function _xrdRenderRows(samples, readonly) {
+    const tbody = document.getElementById('xrd-rows');
+    tbody.innerHTML = '';
+    samples.forEach((s, i) => {
+      const tr = document.createElement('tr');
+      const inputAttrs = readonly
+        ? 'readonly style="background:#e9ecef;"'
+        : `onchange="_maAssignments[0] && (_maAssignments[0].samples[${i}].uuid = this.value)"`;
+      const nameCell = readonly
+        ? `<td class="small"><div class="d-flex justify-content-between align-items-center gap-1">
+             <span class="text-truncate" style="max-width:140px;" title="${s.name}">${s.name || '—'}</span>
+             <button type="button" class="btn-close flex-shrink-0" style="font-size:0.6rem;"
+                     onclick="xrdRemoveChildRow(${i})" title="Remove this sample from upload"></button>
+           </div></td>`
+        : `<td class="small text-truncate" style="max-width:160px;" title="${s.name}">${s.name || '—'}</td>`;
+      tr.innerHTML = `
+        <td class="text-muted small font-monospace">${s.position}</td>
+        ${nameCell}
+        <td><input type="text" class="form-control form-control-sm font-monospace"
+             value="${s.uuid}" ${inputAttrs} /></td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('xrd-empty-msg').classList.add('d-none');
+    document.getElementById('xrd-assignment-area').classList.remove('d-none');
+  }
+
+  window.xrdRemoveChildRow = function (i) {
+    if (!_maAssignments.length) return;
+    _maAssignments[0].samples.splice(i, 1);
+    _xrdRenderRows(_maAssignments[0].samples, /*readonly=*/true);
+  };
+
+  function _xrdRenderSingleRows() {
+    // One row per file entry, each with its own UUID input
+    const tbody = document.getElementById('xrd-rows');
+    tbody.innerHTML = '';
+    _maAssignments.forEach((fileObj, fi) => {
+      const s = fileObj.samples[0] || {};
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="text-muted small font-monospace">F${String(fi + 1).padStart(2, '0')}</td>
+        <td class="small text-truncate" style="max-width:160px;" title="${fileObj.basename}">${fileObj.basename}</td>
+        <td><input type="text" class="form-control form-control-sm font-monospace"
+             value="${s.uuid || ''}"
+             onchange="_maAssignments[${fi}] && (_maAssignments[${fi}].samples[0].uuid = this.value)" /></td>`;
+      tbody.appendChild(tr);
+    });
+    document.getElementById('xrd-empty-msg').classList.add('d-none');
+    document.getElementById('xrd-assignment-area').classList.remove('d-none');
+  }
+
+  window._instrumentPanelBuilders['inorganic_xrd'] = function () {
+    if (!_maAssignments.length) return;
+    const mode = _xrdMode();
+    if (mode === 'single') {
+      _xrdRenderSingleRows();
+    } else {
+      const fileObj = _maAssignments[0];
+      const readonly = fileObj.source === 'parent';
+      if (!readonly) fileObj.parent_sample = null;
+      _xrdRenderRows(fileObj.samples, readonly);
+    }
+  };
+
+  window._instrumentPanelClearers['inorganic_xrd'] = _xrdClear;
+
+  window._instrumentPanelParsers['inorganic_xrd'] = async function (paths) {
+    const mode = _xrdMode();
+
+    if (mode === 'parent') {
+      // Just update path on the existing resolved assignment
+      if (_maAssignments.length && paths.length) {
+        _maAssignments[0].path = paths[0];
+        const name = paths[0].split(/[\\/]/).pop();
+        _maAssignments[0].basename = name;
+        document.getElementById('xrd-parent-file-name').textContent = name;
+        document.getElementById('xrd-parent-file-row').classList.remove('d-none');
+      }
+      return;
+    }
+
+    if (mode === 'single') {
+      // N files → N assignments, one sample UUID per file, no parsing needed
+      _xrdClear();
+      if (!paths.length) return;
+      _maAssignments = paths.map(p => ({
+        path: p,
+        basename: p.split(/[\\/]/).pop(),
+        source: 'single',
+        link_samples: true,
+        parent_sample: null,
+        samples: [{position: 'S01', name: p.split(/[\\/]/).pop(), uuid: '', excluded: false}],
+      }));
+      window._instrumentPanelBuilders['inorganic_xrd']();
+      return;
+    }
+
+    // From File: 1 combined file → N samples from FILE_PARSER
+    _xrdClear();
+    if (!paths.length) return;
+    document.getElementById('xrd-spinner').classList.remove('d-none');
+    try {
+      const res = await fetch('/api/parse_files', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({instrument: 'inorganic_xrd', files: [paths[0]]}),
+      });
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || 'Failed to parse file.', 'danger'); return; }
+      _maAssignments = data.files.map(f => ({
+        ...f, source: 'file', link_samples: false, parent_sample: null,
+      }));
+      window._instrumentPanelBuilders['inorganic_xrd']();
+    } catch (e) {
+      showStatus('Parse error: ' + e.message, 'danger');
+    } finally {
+      document.getElementById('xrd-spinner').classList.add('d-none');
+    }
+  };
+
+  window.xrdOnModeChange = function () {
+    _xrdClear();
+    const isParent = _xrdMode() === 'parent';
+    document.getElementById('xrd-parent-fields').classList.toggle('d-none', !isParent);
+    if (!isParent && state.selectedPaths && state.selectedPaths.length) {
+      window._instrumentPanelParsers['inorganic_xrd'](state.selectedPaths);
+    }
+  };
+
+  window.xrdResolveParent = function () {
+    const parentUuid = document.getElementById('xrd-parent-uuid').value.trim();
+    if (!parentUuid) { showStatus('Enter a parent sample UUID first.', 'warning'); return; }
+
+    const spinner = document.getElementById('xrd-spinner-resolve');
+    spinner.classList.remove('d-none');
+    _xrdClear();
+
+    fetch('/api/resolve_children', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sample_uuid: parentUuid}),
+    })
+      .then(r => r.json().then(d => ({ok: r.ok, d})))
+      .then(({ok, d}) => {
+        if (!ok) { showStatus(d.error || 'Failed to resolve children.', 'danger'); return; }
+        const children = d.children || [];
+        if (!children.length) { showStatus('No child samples found for this UUID.', 'warning'); return; }
+
+        const existingPath = state.selectedPaths && state.selectedPaths.length ? state.selectedPaths[0] : '';
+        _maAssignments = [{
+          path: existingPath,
+          basename: existingPath ? existingPath.split(/[\\/]/).pop() : '',
+          source: 'parent',
+          link_samples: false,
+          parent_sample: parentUuid,
+          samples: children.map((c, i) => ({
+            position: `S${String(i + 1).padStart(2, '0')}`,
+            name: c.sample_name,
+            uuid: c.unique_id,
+            excluded: false,
+          })),
+        }];
+
+        if (existingPath) {
+          document.getElementById('xrd-parent-file-name').textContent = _maAssignments[0].basename;
+          document.getElementById('xrd-parent-file-row').classList.remove('d-none');
+        }
+
+        _xrdRenderRows(_maAssignments[0].samples, /*readonly=*/true);
+      })
+      .catch(e => showStatus('Resolve error: ' + e.message, 'danger'))
+      .finally(() => spinner.classList.add('d-none'));
+  };
+})();
+</script>

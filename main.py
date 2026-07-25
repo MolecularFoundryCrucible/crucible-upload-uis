@@ -507,6 +507,24 @@ def parse_files():
     return jsonify({"files": results})
 
 
+@app.post("/api/resolve_children")
+def resolve_children():
+    data = request.json or {}
+    sample_uuid = (data.get("sample_uuid") or "").strip()
+    if not sample_uuid:
+        return jsonify({"error": "sample_uuid required"}), 400
+    try:
+        children = backend.client.samples.list_children(sample_uuid)
+        result = sorted(
+            [{"unique_id": c["unique_id"], "sample_name": c.get("sample_name", "")} for c in children],
+            key=lambda x: x["sample_name"],
+        )
+        return jsonify({"children": result})
+    except Exception as e:
+        backend.logger.error(f"resolve_children failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.post("/api/resolve_holders")
 def resolve_holders():
     data = request.json or {}
@@ -554,6 +572,7 @@ def multi_assignment_upload():
         sample_uuids = item.get("sample_uuids") or []
         excluded_uuids = item.get("excluded_uuids") or []
         link_samples = bool(item.get("link_samples", False))
+        parent_sample = item.get("parent_sample") or None
         if not file_path:
             continue
         try:
@@ -565,6 +584,7 @@ def multi_assignment_upload():
                     "sample_uuids": sample_uuids,
                     "excluded_uuids": excluded_uuids,
                     "link_samples": link_samples,
+                    "parent_sample": parent_sample,
                     "project_id": project_id,
                     "orcid": orcid,
                     "instrument_name": instrument_name,

@@ -1021,9 +1021,13 @@
         if (!res.ok) { showStatus(data.error || "Failed to resolve holders.", "danger"); return; }
         const resolved = (data.files || [])[0];
         if (resolved) {
+          const holderUuids = [...document.querySelectorAll(".ma-holder-uuid")]
+            .map(el => el.value.trim()).filter(Boolean);
+          const parentSample = holderUuids.length === 1 ? holderUuids[0] : holderUuids;
           _maAssignments.forEach(fileObj => {
             fileObj.samples = resolved.samples.map(s => ({...s}));
             fileObj.source = 'holders';
+            fileObj.parent_sample = parentSample;
           });
           _buildNirvanaTabs();
         }
@@ -1035,6 +1039,10 @@
     }
 
     function _clearNirvanaUI() {
+      if ((window._instrumentPanelClearers || {})[document.getElementById('instrument').value]) {
+        window._instrumentPanelClearers[document.getElementById('instrument').value]();
+        return;
+      }
       _maAssignments = [];
       document.getElementById("ma-tabs").innerHTML = "";
       document.getElementById("ma-tabs").classList.add("d-none");
@@ -1043,6 +1051,9 @@
     }
 
     async function parseAssignmentFiles(instrument, paths) {
+      const customParser = (window._instrumentPanelParsers || {})[instrument];
+      if (customParser) { await customParser(paths); return; }
+
       _clearNirvanaUI();
       if (!paths.length) return;
 
@@ -1068,6 +1079,10 @@
     }
 
     function _buildNirvanaTabs() {
+      if ((window._instrumentPanelBuilders || {})[document.getElementById('instrument').value]) {
+        window._instrumentPanelBuilders[document.getElementById('instrument').value]();
+        return;
+      }
       const tabList = document.getElementById("ma-tabs");
       const tabContent = document.getElementById("ma-tab-content");
       tabList.innerHTML = "";
@@ -1169,7 +1184,8 @@
         file: fileObj.path,
         sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
         excluded_uuids: fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean),
-        link_samples: fileObj.source === 'holders',
+        link_samples: !!fileObj.link_samples,
+        parent_sample: fileObj.parent_sample || null,
       }));
 
       const payload = {

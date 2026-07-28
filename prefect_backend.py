@@ -318,7 +318,8 @@ def create_dataset(files: list[str],
                    kw_list: list[str] = [],
                    comments: str | None = None,
                    ingestor: str | None = None,
-                   excluded_uuids: list[str] = []) -> str:
+                   excluded_uuids: list[str] = [],
+                   position: str | None = None) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -332,6 +333,8 @@ def create_dataset(files: list[str],
     scimd = {'comments': comments} if comments else {}
     if excluded_uuids:
         scimd['skipped thin films'] = excluded_uuids
+    if position:
+        scimd['position'] = position
     try:
         new_ds = client.datasets.create(
             ds,
@@ -696,7 +699,8 @@ def parent_child_upload(file: str,
                         instrument_name: str = "",
                         kw_list: list[str] = [],
                         comments: str | None = None,
-                        ingestor: str | None = None) -> str:
+                        ingestor: str | None = None,
+                        child_positions: list[str] = []) -> str:
     from instruments.registry import POST_PROCESSING_REQUESTS
     from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
@@ -708,13 +712,15 @@ def parent_child_upload(file: str,
     link_dataset_and_sample(parent_dsid, parent_sample_uuid)
     logger.info(f"Created parent dataset {parent_dsid}, linked to {parent_sample_uuid}")
 
-    for child_uuid in child_sample_uuids:
+    for i, child_uuid in enumerate(child_sample_uuids):
+        position = child_positions[i] if i < len(child_positions) else None
         child_dsid = create_dataset(files=[file], instrument_name=instrument_name,
                                     project_id=project_id, orcid=orcid,
-                                    kw_list=kw_list, comments=comments, ingestor=ingestor)
+                                    kw_list=kw_list, comments=comments, ingestor=ingestor,
+                                    position=position)
         link_dataset_and_sample(child_dsid, child_uuid)
         link_dataset_to_session(child_dsid, parent_dsid)
-        logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}")
+        logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}, position={position}")
         if CHAIN_POST_PROCESSING:
             for name in requests:
                 request_post_processing(name, child_dsid)

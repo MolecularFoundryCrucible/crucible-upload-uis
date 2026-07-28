@@ -592,10 +592,12 @@ def multi_assignment_upload():
             elif upload_mode == "parent_child":
                 parent_uuid = item.get("parent_uuid") or ""
                 child_uuids = item.get("child_uuids") or []
+                child_positions = item.get("child_positions") or []
                 flow_run = run_deployment(
                     "parent-child-upload/parent-child-upload",
                     parameters={"file": file_path, "parent_sample_uuid": parent_uuid,
-                                "child_sample_uuids": child_uuids, **common},
+                                "child_sample_uuids": child_uuids, "child_positions": child_positions,
+                                **common},
                     timeout=0,
                 )
                 submitted.append({"file": os.path.basename(file_path), "flow_run_id": str(flow_run.id)})

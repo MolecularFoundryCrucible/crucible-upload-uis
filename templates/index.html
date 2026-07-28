@@ -1185,11 +1185,13 @@
         const mode = fileObj.upload_mode || 'single';
         const excluded_uuids = fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean);
         if (mode === 'parent_child') {
+          const nonExcluded = fileObj.samples.filter(s => !s.excluded);
           return {
             file: fileObj.path,
             upload_mode: 'parent_child',
             parent_uuid: fileObj.parent_uuid || null,
-            child_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
+            child_uuids: nonExcluded.map(s => s.uuid).filter(Boolean),
+            child_positions: nonExcluded.map(s => s.position || ''),
             excluded_uuids,
           };
         }

@@ -1023,11 +1023,12 @@
         if (resolved) {
           const holderUuids = [...document.querySelectorAll(".ma-holder-uuid")]
             .map(el => el.value.trim()).filter(Boolean);
-          const parentSample = holderUuids.length === 1 ? holderUuids[0] : holderUuids;
+          const parentUuid = holderUuids.length === 1 ? holderUuids[0] : holderUuids[0];
           _maAssignments.forEach(fileObj => {
             fileObj.samples = resolved.samples.map(s => ({...s}));
             fileObj.source = 'holders';
-            fileObj.parent_sample = parentSample;
+            fileObj.upload_mode = 'parent_child';
+            fileObj.parent_uuid = parentUuid;
           });
           _buildNirvanaTabs();
         }
@@ -1069,7 +1070,7 @@
           showStatus(data.error || "Failed to parse h5 files.", "danger");
           return;
         }
-        _maAssignments = data.files.map(f => ({...f, source: 'file'}));
+        _maAssignments = data.files.map(f => ({...f, source: 'file', upload_mode: 'single', link_samples: false}));
         _buildNirvanaTabs();
       } catch (e) {
         showStatus("Parse error: " + e.message, "danger");
@@ -1180,13 +1181,34 @@
       if (!_maAssignments.length) missing.push("files (browse and select first)");
       if (missing.length) { showStatus("Please fill in: " + missing.join(", ") + ".", "danger"); return; }
 
-      const assignments = _maAssignments.map(fileObj => ({
-        file: fileObj.path,
-        sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
-        excluded_uuids: fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean),
-        link_samples: !!fileObj.link_samples,
-        parent_sample: fileObj.parent_sample || null,
-      }));
+      const assignments = _maAssignments.map(fileObj => {
+        const mode = fileObj.upload_mode || 'single';
+        const excluded_uuids = fileObj.samples.filter(s => s.excluded).map(s => s.uuid).filter(Boolean);
+        if (mode === 'parent_child') {
+          return {
+            file: fileObj.path,
+            upload_mode: 'parent_child',
+            parent_uuid: fileObj.parent_uuid || null,
+            child_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
+            excluded_uuids,
+          };
+        }
+        if (mode === 'flat_multi') {
+          return {
+            file: fileObj.path,
+            upload_mode: 'flat_multi',
+            sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
+            excluded_uuids,
+          };
+        }
+        return {
+          file: fileObj.path,
+          upload_mode: 'single',
+          sample_uuids: fileObj.samples.filter(s => !s.excluded).map(s => s.uuid).filter(Boolean),
+          excluded_uuids,
+          link_samples: !!fileObj.link_samples,
+        };
+      });
 
       const payload = {
         orcid,

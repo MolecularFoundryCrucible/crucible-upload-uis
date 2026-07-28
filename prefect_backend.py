@@ -318,9 +318,7 @@ def create_dataset(files: list[str],
                    kw_list: list[str] = [],
                    comments: str | None = None,
                    ingestor: str | None = None,
-                   excluded_uuids: list[str] = [],
-                   parent_sample: str | None = None,
-                   sample_assignments: list[str] = []) -> str:
+                   excluded_uuids: list[str] = []) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -334,10 +332,6 @@ def create_dataset(files: list[str],
     scimd = {'comments': comments} if comments else {}
     if excluded_uuids:
         scimd['skipped thin films'] = excluded_uuids
-    if parent_sample:
-        scimd['parent_sample'] = parent_sample
-    if sample_assignments:
-        scimd['sample_assignments'] = sample_assignments
     try:
         new_ds = client.datasets.create(
             ds,
@@ -634,8 +628,7 @@ def multi_assignment_upload(file: str,
                    comments: str | None = None,
                    ingestor: str | None = None,
                    excluded_uuids: list[str] = [],
-                   link_samples: bool = False,
-                   parent_sample: str | None = None) -> str:
+                   link_samples: bool = False) -> str:
     from instruments.registry import POST_PROCESSING_REQUESTS
     from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
@@ -648,9 +641,7 @@ def multi_assignment_upload(file: str,
                               kw_list=kw_list,
                               comments=comments,
                               ingestor=ingestor,
-                              excluded_uuids=excluded_uuids,
-                              parent_sample=parent_sample,
-                              sample_assignments=sample_uuids)
+                              excluded_uuids=excluded_uuids)
     if link_samples and sample_uuids:
         link_dataset_and_sample(new_dsid, sample_uuids)
         logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
@@ -664,3 +655,71 @@ def multi_assignment_upload(file: str,
             request_post_processing.submit(name, new_dsid)
 
     return new_dsid
+
+
+@flow(flow_run_name=_run_name("flat-multi"))
+def flat_multi_upload(file: str,
+                      sample_uuids: list[str],
+                      project_id: str,
+                      orcid: str,
+                      instrument_name: str = "",
+                      kw_list: list[str] = [],
+                      comments: str | None = None,
+                      ingestor: str | None = None) -> list[str]:
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
+    logger = get_run_logger()
+    dsids = []
+    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
+    for uuid in sample_uuids:
+        dsid = create_dataset(files=[file], instrument_name=instrument_name,
+                              project_id=project_id, orcid=orcid,
+                              kw_list=kw_list, comments=comments, ingestor=ingestor)
+        link_dataset_and_sample(dsid, uuid)
+        logger.info(f"Created dataset {dsid} linked to sample {uuid}")
+        if CHAIN_POST_PROCESSING:
+            for name in requests:
+                request_post_processing(name, dsid)
+        else:
+            for name in requests:
+                request_post_processing.submit(name, dsid)
+        dsids.append(dsid)
+    return dsids
+
+
+@flow(flow_run_name=_run_name("parent-child"))
+def parent_child_upload(file: str,
+                        parent_sample_uuid: str,
+                        child_sample_uuids: list[str],
+                        project_id: str,
+                        orcid: str,
+                        instrument_name: str = "",
+                        kw_list: list[str] = [],
+                        comments: str | None = None,
+                        ingestor: str | None = None) -> str:
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
+    logger = get_run_logger()
+    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
+
+    parent_dsid = create_dataset(files=[file], instrument_name=instrument_name,
+                                 project_id=project_id, orcid=orcid,
+                                 kw_list=kw_list, comments=comments, ingestor=ingestor)
+    link_dataset_and_sample(parent_dsid, parent_sample_uuid)
+    logger.info(f"Created parent dataset {parent_dsid}, linked to {parent_sample_uuid}")
+
+    for child_uuid in child_sample_uuids:
+        child_dsid = create_dataset(files=[file], instrument_name=instrument_name,
+                                    project_id=project_id, orcid=orcid,
+                                    kw_list=kw_list, comments=comments, ingestor=ingestor)
+        link_dataset_and_sample(child_dsid, child_uuid)
+        link_dataset_to_session(child_dsid, parent_dsid)
+        logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}")
+        if CHAIN_POST_PROCESSING:
+            for name in requests:
+                request_post_processing(name, child_dsid)
+        else:
+            for name in requests:
+                request_post_processing.submit(name, child_dsid)
+
+    return parent_dsid

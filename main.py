@@ -560,46 +560,60 @@ def multi_assignment_upload():
     if not assignments:
         return jsonify({"error": "assignments list required"}), 400
 
-    try:
-        valid_dsids = backend.existing_dsids(orcid, project_id)
-    except Exception as e:
-        backend.logger.error(e)
-        return jsonify({"error": str(e)}), 500
+    # Only 'single' mode needs SHA dedup; fetch once for those items.
+    single_items = [a for a in assignments if (a.get("upload_mode") or "single") == "single"]
+    valid_dsids = {}
+    if single_items:
+        try:
+            valid_dsids = backend.existing_dsids(orcid, project_id)
+        except Exception as e:
+            backend.logger.error(e)
+            return jsonify({"error": str(e)}), 500
 
     submitted = []
     for item in assignments:
         file_path = item.get("file", "")
-        sample_uuids = item.get("sample_uuids") or []
-        excluded_uuids = item.get("excluded_uuids") or []
-        link_samples = bool(item.get("link_samples", False))
-        parent_sample = item.get("parent_sample") or None
         if not file_path:
             continue
+        upload_mode = item.get("upload_mode") or "single"
+        excluded_uuids = item.get("excluded_uuids") or []
+        common = dict(project_id=project_id, orcid=orcid, instrument_name=instrument_name,
+                      kw_list=kw_list, comments=comments, ingestor=ingestor)
         try:
-            dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
-            flow_run = run_deployment(
-                "multi-assignment-upload/multi-assignment-upload",
-                parameters={
-                    "file": file_path,
-                    "sample_uuids": sample_uuids,
-                    "excluded_uuids": excluded_uuids,
-                    "link_samples": link_samples,
-                    "parent_sample": parent_sample,
-                    "project_id": project_id,
-                    "orcid": orcid,
-                    "instrument_name": instrument_name,
-                    "dsid": dsid,
-                    "kw_list": kw_list,
-                    "comments": comments,
-                    "ingestor": ingestor,
-                },
-                timeout=0,
-            )
-            submitted.append({
-                "file": os.path.basename(file_path),
-                "flow_run_id": str(flow_run.id),
-                "dsid": dsid,
-            })
+            if upload_mode == "flat_multi":
+                sample_uuids = item.get("sample_uuids") or []
+                flow_run = run_deployment(
+                    "flat-multi-upload/flat-multi-upload",
+                    parameters={"file": file_path, "sample_uuids": sample_uuids, **common},
+                    timeout=0,
+                )
+                submitted.append({"file": os.path.basename(file_path), "flow_run_id": str(flow_run.id)})
+
+            elif upload_mode == "parent_child":
+                parent_uuid = item.get("parent_uuid") or ""
+                child_uuids = item.get("child_uuids") or []
+                flow_run = run_deployment(
+                    "parent-child-upload/parent-child-upload",
+                    parameters={"file": file_path, "parent_sample_uuid": parent_uuid,
+                                "child_sample_uuids": child_uuids, **common},
+                    timeout=0,
+                )
+                submitted.append({"file": os.path.basename(file_path), "flow_run_id": str(flow_run.id)})
+
+            else:  # 'single'
+                sample_uuids = item.get("sample_uuids") or []
+                link_samples = bool(item.get("link_samples", False))
+                dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+                flow_run = run_deployment(
+                    "multi-assignment-upload/multi-assignment-upload",
+                    parameters={"file": file_path, "sample_uuids": sample_uuids,
+                                "excluded_uuids": excluded_uuids, "link_samples": link_samples,
+                                "dsid": dsid, **common},
+                    timeout=0,
+                )
+                submitted.append({"file": os.path.basename(file_path),
+                                  "flow_run_id": str(flow_run.id), "dsid": dsid})
+
         except Exception as e:
             backend.logger.error(f"multi_assignment upload failed for {file_path}: {repr(e)}")
             return jsonify({"error": str(e)}), 500

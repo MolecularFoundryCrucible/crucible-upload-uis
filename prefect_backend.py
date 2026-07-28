@@ -319,7 +319,8 @@ def create_dataset(files: list[str],
                    comments: str | None = None,
                    ingestor: str | None = None,
                    excluded_uuids: list[str] = [],
-                   position: str | None = None) -> str:
+                   position: str | None = None,
+                   mark_as_parent: bool = False) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -335,6 +336,8 @@ def create_dataset(files: list[str],
         scimd['skipped thin films'] = excluded_uuids
     if position:
         scimd['position'] = position
+    if mark_as_parent:
+        scimd['upload_mode'] = 'parent'
     try:
         new_ds = client.datasets.create(
             ds,
@@ -708,7 +711,8 @@ def parent_child_upload(file: str,
 
     parent_dsid = create_dataset(files=[file], instrument_name=instrument_name,
                                  project_id=project_id, orcid=orcid,
-                                 kw_list=kw_list, comments=comments, ingestor=ingestor)
+                                 kw_list=kw_list, comments=comments, ingestor=ingestor,
+                                 mark_as_parent=True)
     link_dataset_and_sample(parent_dsid, parent_sample_uuid)
     logger.info(f"Created parent dataset {parent_dsid}, linked to {parent_sample_uuid}")
 

@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "flask>=3.0",
     "h5py>=3.0",
-    "nano-crucible==3.0.1",
+    "nano-crucible==3.1",
     "pillow>=12.1.1",
     "prefect>=3.6.25",
     "pytest>=9.0.3",

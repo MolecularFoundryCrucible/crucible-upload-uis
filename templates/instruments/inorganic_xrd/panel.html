@@ -136,7 +136,6 @@
     } else {
       const fileObj = _maAssignments[0];
       const readonly = fileObj.source === 'parent';
-      if (!readonly) fileObj.parent_sample = null;
       _xrdRenderRows(fileObj.samples, readonly);
     }
   };
@@ -166,8 +165,8 @@
         path: p,
         basename: p.split(/[\\/]/).pop(),
         source: 'single',
+        upload_mode: 'single',
         link_samples: true,
-        parent_sample: null,
         samples: [{position: 'S01', name: p.split(/[\\/]/).pop(), uuid: '', excluded: false}],
       }));
       window._instrumentPanelBuilders['inorganic_xrd']();
@@ -187,7 +186,7 @@
       const data = await res.json();
       if (!res.ok) { showStatus(data.error || 'Failed to parse file.', 'danger'); return; }
       _maAssignments = data.files.map(f => ({
-        ...f, source: 'file', link_samples: false, parent_sample: null,
+        ...f, source: 'file', upload_mode: 'flat_multi',
       }));
       window._instrumentPanelBuilders['inorganic_xrd']();
     } catch (e) {
@@ -230,8 +229,8 @@
           path: existingPath,
           basename: existingPath ? existingPath.split(/[\\/]/).pop() : '',
           source: 'parent',
-          link_samples: false,
-          parent_sample: parentUuid,
+          upload_mode: 'parent_child',
+          parent_uuid: parentUuid,
           samples: children.map((c, i) => ({
             position: `S${String(i + 1).padStart(2, '0')}`,
             name: c.sample_name,

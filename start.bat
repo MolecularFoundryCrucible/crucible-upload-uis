@@ -3,6 +3,7 @@ cd /d "%~dp0"
 
 :: Kill any leftover processes from a previous run
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":4200 " ^| findstr "LISTENING"') do taskkill /f /pid %%a 2>nul
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":5000 " ^| findstr "LISTENING"') do taskkill /f /pid %%a 2>nul
 wmic process where "commandline like '%%serve_flows%%'" delete 2>nul
 wmic process where "commandline like '%%prefect server%%'" delete 2>nul
 timeout /t 2 /nobreak >nul

@@ -14,7 +14,8 @@ DEFAULT_INGESTOR = ''
 CHAIN_POST_PROCESSING = True
 
 PRINT_BARCODE_ENABLED = False
-ACCEPTABLE_FILE_TYPES = {'.bcf', '.dm3', '.dm4', '.emd', '.h5', '.mcr', '.ser', '.txt'}
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg',
+                         '.mcr', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
 
 '''
 To enable barcode printing:

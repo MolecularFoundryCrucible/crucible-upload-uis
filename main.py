@@ -274,16 +274,26 @@ def sample_lookup():
     if not sample_name and not sample_unique_id:
         return jsonify({"error": "sample_name or sample_unique_id required"}), 400
     try:
-        result = backend.lookup_sample(
+        matches = backend.find_samples(
             sample_name=sample_name,
             sample_unique_id=sample_unique_id,
             project_id=project_id,
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    if not result:
+
+    if not matches:
         return jsonify({"error": "No sample found"}), 404
-    return jsonify(result)
+
+    if len(matches) > 1:
+        label = sample_name or sample_unique_id
+        return jsonify({
+            "ambiguous": True,
+            "error": f"{len(matches)} samples named '{label}' exist in this project.",
+            "matches": matches,
+        }), 409
+
+    return jsonify(matches[0])
 
 
 @app.post("/api/sample/create")
@@ -294,6 +304,20 @@ def sample_create():
     project_id = (data.get("project_id") or "").strip()
     if not sample_name or not owner_orcid or not project_id:
         return jsonify({"error": "sample_name, owner_orcid, and project_id are required"}), 400
+
+    if not data.get("allow_duplicate"):
+        try:
+            existing = backend.find_samples(sample_name=sample_name, project_id=project_id)
+        except Exception as e:
+            backend.logger.error(e)
+            return jsonify({"error": str(e)}), 500
+        if existing:
+            return jsonify({
+                "exists": True,
+                "error": f"{len(existing)} sample(s) named '{sample_name}' already exist in this project.",
+                "matches": existing,
+            }), 409
+
     try:
         result = backend.create_sample(
             sample_name=sample_name,

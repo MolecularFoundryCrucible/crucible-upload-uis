@@ -85,48 +85,43 @@ def lookup_user_by_email(email: str) -> dict:
     return lookup_user(email)
 
 
-def lookup_sample(sample_name: str | None = None, sample_unique_id: str | None = None, project_id: str | None = None) -> dict:
+def _format_sample(sample: dict) -> dict:
+    parts = [f"Type: {sample.get('sample_type', '')}",
+             f"Created: {sample.get('date_created', '')}",
+             sample.get("description", "")]
+    return {
+        'unique_id': sample['unique_id'],
+        'sample_name': sample['sample_name'],
+        'sample_type': sample.get('sample_type', ''),
+        'date_created': sample.get('date_created', ''),
+        'description': "\n".join(p for p in parts if p),
+    }
+
+
+def find_samples(sample_name: str | None = None, sample_unique_id: str | None = None, project_id: str | None = None) -> list[dict]:
     """
-    Look up a sample by its name or sample_unique_id.
+    Find every sample matching a name or sample_unique_id.
 
-    Returns a dict with keys:
-            unique_id: string
-            sample_name: string
-            sample_type: string
-            date_created: string
-            description: string
+    Sample names are not unique, so this returns a list. Callers must decide
+    what to do with zero matches and with several; picking one arbitrarily
+    attaches data to the wrong sample.
 
-    Returns an empty dict if not found.
+    Each entry has keys: unique_id, sample_name, sample_type, date_created, description
     """
     kwargs = {k: v for k, v in {
         "sample_name": sample_name,
-        "unique_id": sample_unique_id,   # client.list_samples expects "unique_id"
+        "unique_id": sample_unique_id,
         "project_id": project_id,
     }.items() if v is not None}
 
     found_samples = client.samples.list(**kwargs)
 
-    # If you only find one sample - great, otherwise warn user
-    if len(found_samples) == 1:
-        sample = found_samples[0]
-        
-        parts = [f"Type: {sample.get('sample_type', '')}" ,                                                                                       
-                 f"Created: {sample.get('date_created', '')}",                                                                                  
-                 sample.get("description", "")
-                 ]
-        
-        return_fields = ['unique_id', 'sample_name']
-        formatted_sample = {k: sample[k] for k in return_fields}                                                                                                                                            
-        formatted_sample['description'] = "\n".join(p for p in parts if p)      
-        return formatted_sample
-
+    if not found_samples:
+        logger.warning(f'No sample found with {sample_name=} in project {project_id}. Note: sample names are case sensitive.')
     elif len(found_samples) > 1:
         logger.warning(f'Multiple samples found - {found_samples=}')
-        return {}
 
-    else:
-        logger.warning(f'No sample found with {sample_name=} in project {project_id}. Note: sample names are case sensitive.')
-        return {}
+    return [_format_sample(s) for s in found_samples]
 
 
 def create_sample(sample_name: str,
@@ -147,16 +142,8 @@ def create_sample(sample_name: str,
         "owner_user_id": owner_orcid,
     }.items() if v is not None}
 
-    try:
-        result = client.samples.create(**kwargs)
-    except Exception as error:
-        results = client.samples.list(sample_name = sample_name, project_id = project_id)
-        if len(results) > 0:
-            result = results[-1]
-        else:
-            result = None
-            raise Exception(f'Failed to create sample with {error=}. No samples matching name and project found.') 
-        
+    result = client.samples.create(**kwargs)
+
     logger.info(f"Created sample: {result}")
     return {
         'unique_id': result.get('unique_id', ''),

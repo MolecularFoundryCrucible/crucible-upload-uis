@@ -308,6 +308,27 @@
     </div>
   </div>
 
+  <!-- Sample Conflict Modal -->
+  <div class="modal fade" id="sample-conflict-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Sample name already in use</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <p id="sample-conflict-message" class="mb-3"></p>
+          <div id="sample-conflict-list"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-outline-danger" id="sample-conflict-create">Create another anyway</button>
+          <button type="button" class="btn btn-primary" id="sample-conflict-use">Use selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Instrument Config Modal -->
   <div class="modal fade" id="config-modal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
@@ -535,6 +556,70 @@
     // -------------------------------------------------------------------------
     // Sample lookup
     // -------------------------------------------------------------------------
+    function escapeHtml(str) {
+      const d = document.createElement("div");
+      d.textContent = str == null ? "" : String(str);
+      return d.innerHTML;
+    }
+
+    function adoptSample(sample) {
+      document.getElementById("sample-name").value = sample.sample_name || "";
+      document.getElementById("sample-uid").value = sample.unique_id || "";
+      document.getElementById("description").value = sample.description || "";
+    }
+
+    let createAllowDuplicate = false;
+
+    function openCreateSampleModal(sampleName, allowDuplicate = false) {
+      createAllowDuplicate = allowDuplicate;
+      document.getElementById("create-sample-name").value = sampleName;
+      document.getElementById("create-sample-type").value = "";
+      document.getElementById("create-sample-description").value = "";
+      new bootstrap.Modal(document.getElementById("create-sample-modal")).show();
+    }
+
+    function showSampleConflict(message, matches, onCreateAnyway) {
+      document.getElementById("sample-conflict-message").textContent = message;
+      document.getElementById("sample-conflict-list").innerHTML = matches.map((m, i) => `
+        <div class="form-check border rounded p-2 mb-2">
+          <input class="form-check-input ms-0 me-2" type="radio" name="sample-conflict-pick"
+                 id="sample-conflict-${i}" value="${i}" ${i === 0 ? "checked" : ""}>
+          <label class="form-check-label" for="sample-conflict-${i}">
+            <span class="fw-semibold">${escapeHtml(m.sample_name)}</span>
+            <span class="text-muted small ms-2">${escapeHtml(m.unique_id)}</span>
+            <div class="text-muted small">
+              ${escapeHtml(m.sample_type || "no type")} &middot;
+              created ${escapeHtml(m.date_created || "unknown")}
+            </div>
+          </label>
+        </div>`).join("");
+
+      const modalEl = document.getElementById("sample-conflict-modal");
+      const modal = new bootstrap.Modal(modalEl);
+
+      const useBtn = document.getElementById("sample-conflict-use");
+      const createBtn = document.getElementById("sample-conflict-create");
+      const newUse = useBtn.cloneNode(true);
+      const newCreate = createBtn.cloneNode(true);
+      useBtn.parentNode.replaceChild(newUse, useBtn);
+      createBtn.parentNode.replaceChild(newCreate, createBtn);
+
+      newUse.addEventListener("click", () => {
+        const picked = document.querySelector('input[name="sample-conflict-pick"]:checked');
+        if (!picked) return;
+        adoptSample(matches[Number(picked.value)]);
+        modal.hide();
+        showStatus("Using existing sample.", "success");
+      });
+
+      newCreate.addEventListener("click", () => {
+        modal.hide();
+        onCreateAnyway();
+      });
+
+      modal.show();
+    }
+
     async function lookupSample(payload, spinnerId) {
       const project = document.getElementById("project").value;
       if (!project) { showStatus("Select a project first.", "warning"); return; }
@@ -549,21 +634,28 @@
           body: JSON.stringify({ ...payload, project_id: project }),
         });
         const data = await res.json();
-        if (!res.ok) {
+
+        if (res.status === 409 && data.ambiguous) {
           document.getElementById("sample-uid").value = "";
           document.getElementById("description").value = "";
-          const searchedName = payload.sample_name || "";
-          document.getElementById("create-sample-name").value = searchedName;
-          document.getElementById("create-sample-type").value = "";
-          document.getElementById("create-sample-description").value = "";
-          const modal = new bootstrap.Modal(document.getElementById("create-sample-modal"));
-          modal.show();
+          showSampleConflict(data.error, data.matches,
+                             () => openCreateSampleModal(payload.sample_name || "", true));
           return;
         }
 
-        document.getElementById("sample-name").value = data.sample_name || "";
-        document.getElementById("sample-uid").value = data.unique_id || "";
-        document.getElementById("description").value = data.description || "";
+        if (res.status === 404) {
+          document.getElementById("sample-uid").value = "";
+          document.getElementById("description").value = "";
+          openCreateSampleModal(payload.sample_name || "", false);
+          return;
+        }
+
+        if (!res.ok) {
+          showStatus(data.error || "Sample lookup failed", "danger");
+          return;
+        }
+
+        adoptSample(data);
       } catch (e) {
         showStatus("Sample lookup failed: " + e.message, "danger");
       } finally {
@@ -602,6 +694,9 @@
       const project = document.getElementById("project").value;
       if (!project || !state.orcid) { showStatus("User and project must be selected first.", "warning"); return; }
 
+      const sampleType = document.getElementById("create-sample-type").value.trim() || null;
+      const description = document.getElementById("create-sample-description").value.trim() || null;
+
       document.getElementById("spinner-create-sample").classList.remove("d-none");
 
       try {
@@ -610,19 +705,32 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             sample_name: sampleName,
-            sample_type: document.getElementById("create-sample-type").value.trim() || null,
-            description: document.getElementById("create-sample-description").value.trim() || null,
+            sample_type: sampleType,
+            description: description,
             project_id: project,
             owner_orcid: state.orcid,
+            allow_duplicate: createAllowDuplicate,
           }),
         });
         const data = await res.json();
+
+        if (res.status === 409 && data.exists) {
+          const createModal = bootstrap.Modal.getInstance(document.getElementById("create-sample-modal"));
+          if (createModal) createModal.hide();
+          showSampleConflict(data.error, data.matches, () => {
+            createAllowDuplicate = true;
+            submitCreateSample();
+          });
+          return;
+        }
+
         if (!res.ok) { showStatus(data.error || "Failed to create sample", "danger"); return; }
 
         document.getElementById("sample-name").value = data.sample_name || "";
         document.getElementById("sample-uid").value = data.unique_id || "";
         document.getElementById("description").value = "";
-        bootstrap.Modal.getInstance(document.getElementById("create-sample-modal")).hide();
+        const createModal = bootstrap.Modal.getInstance(document.getElementById("create-sample-modal"));
+        if (createModal) createModal.hide();
         showStatus("Sample created successfully.", "success");
       } catch (e) {
         showStatus("Create sample failed: " + e.message, "danger");

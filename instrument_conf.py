@@ -12,11 +12,10 @@ DEFAULT_INGESTOR = ''
 #         the previous succeeding (a failure halts the rest).
 # False = request all of them in parallel (independent of each other).
 CHAIN_POST_PROCESSING = True
-DRY_RUN = False
+DRY_RUN = True
 
 PRINT_BARCODE_ENABLED = False
-ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg',
-                         '.mcr', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg', '.mcr', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
 
 '''
 To enable barcode printing:

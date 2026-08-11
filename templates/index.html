@@ -199,6 +199,10 @@
     </div>
 
     <!-- Status + Upload -->
+    <div id="dry-run-ma-warning" class="alert alert-warning py-2 d-none mb-2">
+      Dry run is not available when samples are assigned manually to specific holder positions.
+      Disable dry run in Config or remove those assignments.
+    </div>
     <div class="d-flex align-items-center gap-3 mb-5">
       <div id="status-box" class="flex-grow-1"></div>
       {% if dry_run %}
@@ -393,9 +397,8 @@
             <label class="form-check-label" for="cfg-dry-run">Dry Run</label>
           </div>
           <div class="alert alert-warning small mb-2 mt-1">
-            <strong>Dry Run note:</strong> Tier 1 uploads (standard/single) use a fake dataset ID — no Crucible records are created.
-            Tier 2 uploads (parent-child) <em>do</em> create real dataset records (with no ingestion) so the ingestor can parse against the correct metadata.
-            Use "Upload now" in the dry run results view to trigger ingestion for Tier 2 datasets.
+            <strong>Dry Run note:</strong> Files are parsed but nothing is uploaded to Crucible. The results show what the ingestor would produce.
+            Parent-child uploads are not affected — they always run as real uploads.
           </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
@@ -1001,7 +1004,7 @@
         if (res.ok) {
           if (data.dry_run) {
             uploadModal.hide();
-            showDryRunResults(data.results, params.ingestor || "");
+            showDryRunResults(data.results);
             return;
           }
           const isSingleDataset = !!data.dsid;
@@ -1191,6 +1194,7 @@
       document.getElementById("ma-tabs").classList.add("d-none");
       document.getElementById("ma-tab-content").innerHTML = "";
       document.getElementById("ma-empty-msg").classList.remove("d-none");
+      _updateMaUploadButton();
     }
 
     async function parseAssignmentFiles(instrument, paths) {
@@ -1219,6 +1223,13 @@
       } finally {
         document.getElementById("ma-parse-spinner").classList.add("d-none");
       }
+    }
+
+    function _updateMaUploadButton() {
+      const hasParentChild = _maAssignments.some(f => f.upload_mode === 'parent_child');
+      const blocked = state.dryRun && hasParentChild;
+      document.getElementById("btn-ma-upload").disabled = blocked;
+      document.getElementById("dry-run-ma-warning").classList.toggle("d-none", !blocked);
     }
 
     function _buildNirvanaTabs() {
@@ -1297,6 +1308,7 @@
         pane.innerHTML = gridHtml;
         tabContent.appendChild(pane);
       });
+      _updateMaUploadButton();
     }
 
     function toggleNirvanaSample(fi, i) {
@@ -1385,7 +1397,7 @@
           const submitted = data.submitted || [];
           if (state.dryRun) {
             uploadModal.hide();
-            showDryRunResults(submitted, ingestor || "");
+            showDryRunResults(submitted);
             return;
           }
           document.getElementById("upload-modal-title").textContent =
@@ -1596,61 +1608,24 @@
     // -------------------------------------------------------------------------
     let dryRunModal = null;
 
-    function showDryRunResults(results, ingestor) {
+    function showDryRunResults(results) {
       const body = document.getElementById("dry-run-modal-body");
       body.innerHTML = "";
 
       results.forEach((r, idx) => {
-        const tier = r.tier || 1;
         const section = document.createElement("div");
         section.className = "mb-4";
 
-        const header = document.createElement("div");
-        header.className = "d-flex align-items-center gap-2 mb-2";
-        header.innerHTML = `
-          <strong>${escapeHtml(r.file || "")}</strong>
-          <span class="badge ${tier === 2 ? "bg-warning text-dark" : "bg-secondary"}">Tier ${tier}</span>`;
+        const header = document.createElement("strong");
+        header.className = "d-block mb-2";
+        header.textContent = r.file || "";
         section.appendChild(header);
 
-        if (tier === 2) {
-          const dsidsToIngest = [];
-
-          const parentRow = document.createElement("div");
-          parentRow.className = "mb-2";
-          parentRow.innerHTML = `<p class="mb-1 text-muted small">Parent dataset: <code>${escapeHtml(r.parent_dsid || "")}</code></p>`;
-          const parentPre = document.createElement("pre");
-          parentPre.className = "bg-light border rounded p-2 small overflow-auto";
-          parentPre.style.maxHeight = "200px";
-          parentPre.textContent = JSON.stringify(r.parent_packet || {}, null, 2);
-          parentRow.appendChild(parentPre);
-          section.appendChild(parentRow);
-          if (r.parent_dsid) dsidsToIngest.push(r.parent_dsid);
-
-          (r.children || []).forEach(child => {
-            const childRow = document.createElement("div");
-            childRow.className = "ms-3 mb-2";
-            childRow.innerHTML = `<p class="mb-1 text-muted small">Child${child.position ? ` (${escapeHtml(String(child.position))})` : ""}: <code>${escapeHtml(child.dsid || "")}</code></p>`;
-            const childPre = document.createElement("pre");
-            childPre.className = "bg-light border rounded p-2 small overflow-auto";
-            childPre.style.maxHeight = "200px";
-            childPre.textContent = JSON.stringify(child.packet || {}, null, 2);
-            childRow.appendChild(childPre);
-            section.appendChild(childRow);
-            if (child.dsid) dsidsToIngest.push(child.dsid);
-          });
-
-          const btn = document.createElement("button");
-          btn.className = "btn btn-sm btn-success mt-1";
-          btn.textContent = "Upload now";
-          btn.onclick = () => pushIngest(dsidsToIngest, ingestor, btn);
-          section.appendChild(btn);
-        } else {
-          const pre = document.createElement("pre");
-          pre.className = "bg-light border rounded p-2 small overflow-auto";
-          pre.style.maxHeight = "300px";
-          pre.textContent = JSON.stringify(r.packet || {}, null, 2);
-          section.appendChild(pre);
-        }
+        const pre = document.createElement("pre");
+        pre.className = "bg-light border rounded p-2 small overflow-auto";
+        pre.style.maxHeight = "400px";
+        pre.textContent = JSON.stringify(r.packet || {}, null, 2);
+        section.appendChild(pre);
 
         if (idx < results.length - 1) {
           section.appendChild(document.createElement("hr"));
@@ -1660,31 +1635,6 @@
 
       if (!dryRunModal) dryRunModal = new bootstrap.Modal(document.getElementById("dry-run-modal"));
       dryRunModal.show();
-    }
-
-    async function pushIngest(dsids, ingestor, btn) {
-      btn.disabled = true;
-      btn.textContent = "Uploading...";
-      try {
-        const res = await fetch("/api/upload/push_ingest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dsids, ingestor: ingestor || null }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          btn.className = "btn btn-sm btn-outline-success mt-1";
-          btn.textContent = "Ingestion triggered";
-        } else {
-          btn.disabled = false;
-          btn.textContent = "Upload now";
-          alert("Ingestion failed: " + (data.error || "Unknown error"));
-        }
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = "Upload now";
-        alert("Ingestion error: " + e.message);
-      }
     }
 
     document.getElementById("upload-modal").addEventListener("hidden.bs.modal", function () {

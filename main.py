@@ -456,8 +456,8 @@ def do_upload():
         path = session_folder_paths[0]
         if dry_run:
             try:
-                packet = backend.run_dry_ingest(path, "xxx", ingestor or "")
-                return jsonify({"dry_run": True, "results": [{"tier": 1, "file": os.path.basename(path), "packet": packet}]})
+                packet = backend.run_dry_ingest(path, ingestor or "")
+                return jsonify({"dry_run": True, "results": [{"file": os.path.basename(path), "packet": packet}]})
             except Exception as e:
                 backend.logger.error(e)
                 return jsonify({"error": str(e)}), 500
@@ -494,8 +494,8 @@ def do_upload():
         results = []
         for path in session_folder_paths:
             try:
-                packet = backend.run_dry_ingest(path, "xxx", ingestor or "")
-                results.append({"tier": 1, "file": os.path.basename(path), "packet": packet})
+                packet = backend.run_dry_ingest(path, ingestor or "")
+                results.append({"file": os.path.basename(path), "packet": packet})
             except Exception as e:
                 backend.logger.error(e)
                 return jsonify({"error": f"Dry run failed for {os.path.basename(path)}: {e}"}), 500
@@ -627,8 +627,8 @@ def multi_assignment_upload():
         try:
             if upload_mode == "flat_multi":
                 if dry_run:
-                    packet = backend.run_dry_ingest(file_path, "xxx", ingestor or "")
-                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "tier": 1, "packet": packet})
+                    packet = backend.run_dry_ingest(file_path, ingestor or "")
+                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "packet": packet})
                     continue
                 sample_uuids = item.get("sample_uuids") or []
                 flow_run = run_deployment(
@@ -642,12 +642,6 @@ def multi_assignment_upload():
                 parent_uuid = item.get("parent_uuid") or ""
                 child_uuids = item.get("child_uuids") or []
                 child_positions = item.get("child_positions") or []
-                if dry_run:
-                    result = backend.dry_run_parent_child(
-                        file_path, parent_uuid, child_uuids, child_positions,
-                        project_id, orcid, instrument_name, kw_list, comments, ingestor or "")
-                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, **result})
-                    continue
                 flow_run = run_deployment(
                     "parent-child-upload/parent-child-upload",
                     parameters={"file": file_path, "parent_sample_uuid": parent_uuid,
@@ -659,8 +653,8 @@ def multi_assignment_upload():
 
             else:  # 'single'
                 if dry_run:
-                    packet = backend.run_dry_ingest(file_path, "xxx", ingestor or "")
-                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "tier": 1, "packet": packet})
+                    packet = backend.run_dry_ingest(file_path, ingestor or "")
+                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "packet": packet})
                     continue
                 sample_uuids = item.get("sample_uuids") or []
                 link_samples = bool(item.get("link_samples", False))
@@ -681,27 +675,6 @@ def multi_assignment_upload():
 
     return jsonify({"submitted": submitted})
 
-
-@app.post("/api/upload/push_ingest")
-def push_ingest():
-    data = request.json or {}
-    dsids = data.get("dsids") or []
-    ingestor = (data.get("ingestor") or "").strip() or None
-    if not dsids:
-        return jsonify({"error": "dsids required"}), 400
-    results = []
-    for dsid in dsids:
-        try:
-            files = backend.client.datasets.list_files(dsid)
-            if not files:
-                return jsonify({"error": f"No files found for dataset {dsid}"}), 404
-            mfid = files[0]["mfid"]
-            backend.client.files.request_ingestion(mfid, ingestion_class=ingestor)
-            results.append({"dsid": dsid, "mfid": mfid, "ok": True})
-        except Exception as e:
-            backend.logger.error(e)
-            return jsonify({"error": f"Ingestion trigger failed for {dsid}: {e}"}), 500
-    return jsonify({"results": results})
 
 
 if __name__ == "__main__":

@@ -199,8 +199,15 @@
     </div>
 
     <!-- Status + Upload -->
+    <div id="dry-run-ma-warning" class="alert alert-warning py-2 d-none mb-2">
+      Dry run is not available when samples are assigned manually to specific holder positions.
+      Disable dry run in Config or remove those assignments.
+    </div>
     <div class="d-flex align-items-center gap-3 mb-5">
       <div id="status-box" class="flex-grow-1"></div>
+      {% if dry_run %}
+      <span class="badge bg-warning text-dark fs-6 px-3 py-2" title="Dry Run mode: files are parsed but not ingested">DRY RUN</span>
+      {% endif %}
       <button id="btn-ma-upload" class="btn btn-success btn-lg px-5 d-none" onclick="confirmAssignmentUpload()">
         <span id="spinner-ma-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Confirm &amp; Upload
@@ -385,6 +392,14 @@
             <input class="form-check-input" type="checkbox" id="cfg-print-barcode" />
             <label class="form-check-label" for="cfg-print-barcode">Enable barcode printing</label>
           </div>
+          <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="cfg-dry-run" />
+            <label class="form-check-label" for="cfg-dry-run">Dry Run</label>
+          </div>
+          <div class="alert alert-warning small mb-2 mt-1">
+            <strong>Dry Run note:</strong> Files are parsed but nothing is uploaded to Crucible. The results show what the ingestor would produce.
+            Parent-child uploads are not affected — they always run as real uploads.
+          </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
             Note: <code>CHAIN_POST_PROCESSING</code> and <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
@@ -398,6 +413,22 @@
             <span id="spinner-save-config" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
             Save &amp; Reload
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dry Run Results Modal -->
+  <div class="modal fade" id="dry-run-modal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header bg-warning text-dark">
+          <h5 class="modal-title">Dry Run Results</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="dry-run-modal-body"></div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         </div>
       </div>
     </div>
@@ -418,6 +449,7 @@
       defaultHolderLayouts: {},
       activeHolderLayout: {},
       defaultIngestors: {},
+      dryRun: {{ dry_run | lower }},
     };
 
     // -------------------------------------------------------------------------
@@ -956,7 +988,7 @@
       }
       uploadModal.show();
 
-      const body = { ...params };
+      const body = { ...params, dry_run: state.dryRun };
       if (_selectedSessionDsid !== null) body.session_dsid = _selectedSessionDsid;
 
       try {
@@ -970,6 +1002,11 @@
         document.getElementById("submitting-section").classList.add("d-none");
 
         if (res.ok) {
+          if (data.dry_run) {
+            uploadModal.hide();
+            showDryRunResults(data.results);
+            return;
+          }
           const isSingleDataset = !!data.dsid;
           document.getElementById("upload-modal-title").textContent =
             isSingleDataset ? "Dataset created — upload running" : "Upload running";
@@ -1157,6 +1194,7 @@
       document.getElementById("ma-tabs").classList.add("d-none");
       document.getElementById("ma-tab-content").innerHTML = "";
       document.getElementById("ma-empty-msg").classList.remove("d-none");
+      _updateMaUploadButton();
     }
 
     async function parseAssignmentFiles(instrument, paths) {
@@ -1185,6 +1223,13 @@
       } finally {
         document.getElementById("ma-parse-spinner").classList.add("d-none");
       }
+    }
+
+    function _updateMaUploadButton() {
+      const hasParentChild = _maAssignments.some(f => f.upload_mode === 'parent_child');
+      const blocked = state.dryRun && hasParentChild;
+      document.getElementById("btn-ma-upload").disabled = blocked;
+      document.getElementById("dry-run-ma-warning").classList.toggle("d-none", !blocked);
     }
 
     function _buildNirvanaTabs() {
@@ -1263,6 +1308,7 @@
         pane.innerHTML = gridHtml;
         tabContent.appendChild(pane);
       });
+      _updateMaUploadButton();
     }
 
     function toggleNirvanaSample(fi, i) {
@@ -1320,14 +1366,16 @@
         };
       });
 
+      const ingestor = document.getElementById("ingestor").value || null;
       const payload = {
         orcid,
         project_id,
         instrument_name,
-        ingestor: document.getElementById("ingestor").value || null,
+        ingestor,
         kw_list: getKeywords(),
         comments: document.getElementById("comments").value.trim() || null,
         assignments,
+        dry_run: state.dryRun,
       };
 
       document.getElementById("spinner-ma-upload").classList.remove("d-none");
@@ -1347,6 +1395,11 @@
 
         if (res.ok) {
           const submitted = data.submitted || [];
+          if (state.dryRun) {
+            uploadModal.hide();
+            showDryRunResults(submitted);
+            return;
+          }
           document.getElementById("upload-modal-title").textContent =
             `${submitted.length} upload${submitted.length !== 1 ? "s" : ""} submitted`;
           document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
@@ -1458,6 +1511,7 @@
         document.getElementById("cfg-browse-dir").value = c.DEFAULT_BROWSE_DIR || "";
         document.getElementById("cfg-chain-postproc").checked = !!c.CHAIN_POST_PROCESSING;
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
+        document.getElementById("cfg-dry-run").checked = !!c.DRY_RUN;
         cfgState.fileTypes = [...(c.ACCEPTABLE_FILE_TYPES || [])];
         renderFileTypeChips();
 
@@ -1522,6 +1576,7 @@
         ACCEPTABLE_FILE_TYPES: cfgState.fileTypes,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
+        DRY_RUN: document.getElementById("cfg-dry-run").checked,
       };
 
       document.getElementById("spinner-save-config").classList.remove("d-none");
@@ -1546,6 +1601,40 @@
         document.getElementById("spinner-save-config").classList.add("d-none");
         document.getElementById("btn-save-config").disabled = false;
       }
+    }
+
+    // -------------------------------------------------------------------------
+    // Dry run results display
+    // -------------------------------------------------------------------------
+    let dryRunModal = null;
+
+    function showDryRunResults(results) {
+      const body = document.getElementById("dry-run-modal-body");
+      body.innerHTML = "";
+
+      results.forEach((r, idx) => {
+        const section = document.createElement("div");
+        section.className = "mb-4";
+
+        const header = document.createElement("strong");
+        header.className = "d-block mb-2";
+        header.textContent = r.file || "";
+        section.appendChild(header);
+
+        const pre = document.createElement("pre");
+        pre.className = "bg-light border rounded p-2 small overflow-auto";
+        pre.style.maxHeight = "400px";
+        pre.textContent = JSON.stringify(r.packet || {}, null, 2);
+        section.appendChild(pre);
+
+        if (idx < results.length - 1) {
+          section.appendChild(document.createElement("hr"));
+        }
+        body.appendChild(section);
+      });
+
+      if (!dryRunModal) dryRunModal = new bootstrap.Modal(document.getElementById("dry-run-modal"));
+      dryRunModal.show();
     }
 
     document.getElementById("upload-modal").addEventListener("hidden.bs.modal", function () {

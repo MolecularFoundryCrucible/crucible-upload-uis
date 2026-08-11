@@ -366,6 +366,23 @@ def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] 
         client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
     return len(uuids)
 
+def run_dry_ingest(file: str, ingestor_name: str) -> dict:
+    """Parse a file with crucible-ingest (no --push) and return the packet dict."""
+    import json, tempfile, os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = ["crucible-ingest", "--file", file, "--dsid", "xxx", "--output-dir", tmpdir]
+        if ingestor_name:
+            cmd += ["--ingestor", ingestor_name]
+        result = sp.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Dry run failed:\n{result.stderr or result.stdout}")
+        packet_path = os.path.join(tmpdir, "packet.json")
+        if not os.path.exists(packet_path):
+            raise RuntimeError("crucible-ingest produced no packet.json")
+        with open(packet_path) as f:
+            return json.load(f)
+
+
 def list_ingestors() -> list[str]:
     raw = client.ingestions.list_ingestors() or []
     result = []

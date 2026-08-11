@@ -15,7 +15,7 @@ CHAIN_POST_PROCESSING = True
 DRY_RUN = True
 
 PRINT_BARCODE_ENABLED = False
-ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg', '.mcr', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg', '.mrc', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
 
 '''
 To enable barcode printing:

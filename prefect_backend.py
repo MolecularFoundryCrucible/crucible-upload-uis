@@ -366,6 +366,70 @@ def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] 
         client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
     return len(uuids)
 
+def run_dry_ingest(file: str, dsid: str, ingestor_name: str) -> dict:
+    """Parse a file with crucible-ingest (no --push) and return the packet dict."""
+    import json, tempfile, os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = ["crucible-ingest", "--file", file, "--dsid", dsid, "--output-dir", tmpdir]
+        if ingestor_name:
+            cmd += ["--ingestor", ingestor_name]
+        result = sp.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Dry run failed:\n{result.stderr or result.stdout}")
+        packet_path = os.path.join(tmpdir, "packet.json")
+        if not os.path.exists(packet_path):
+            raise RuntimeError("crucible-ingest produced no packet.json")
+        with open(packet_path) as f:
+            return json.load(f)
+
+
+def dry_run_parent_child(file: str, parent_sample_uuid: str, child_sample_uuids: list[str],
+                         child_positions: list[str], project_id: str, orcid: str,
+                         instrument_name: str, kw_list: list[str], comments: str | None,
+                         ingestor: str) -> dict:
+    """Tier-2 dry run: create datasets (no ingestion), parse each, return packets + dsids."""
+    import os
+    parent_scimd = {'upload_mode': 'parent'}
+    if comments:
+        parent_scimd['comments'] = comments
+    parent_ds = BaseDataset(owner_orcid=orcid, project_id=project_id, instrument_name=instrument_name)
+    new_parent = client.datasets.create(parent_ds, scientific_metadata=parent_scimd,
+                                        keywords=kw_list, files_to_upload=[file],
+                                        ingestor=None, wait_for_ingestion_response=False)
+    parent_dsid = new_parent['created_record']['unique_id']
+    if parent_sample_uuid:
+        client.samples.add_to_dataset(dataset_id=parent_dsid, sample_id=parent_sample_uuid)
+
+    parent_packet = run_dry_ingest(file, parent_dsid, ingestor)
+
+    children = []
+    for i, child_uuid in enumerate(child_sample_uuids):
+        position = child_positions[i] if i < len(child_positions) else None
+        child_scimd = {}
+        if comments:
+            child_scimd['comments'] = comments
+        if position:
+            child_scimd['position'] = position
+        child_ds = BaseDataset(owner_orcid=orcid, project_id=project_id, instrument_name=instrument_name)
+        new_child = client.datasets.create(child_ds, scientific_metadata=child_scimd,
+                                           keywords=kw_list, files_to_upload=[file],
+                                           ingestor=None, wait_for_ingestion_response=False)
+        child_dsid = new_child['created_record']['unique_id']
+        if child_uuid:
+            client.samples.add_to_dataset(dataset_id=child_dsid, sample_id=child_uuid)
+        client.datasets.link_parent_child(parent_dataset_id=parent_dsid, child_dataset_id=child_dsid)
+        child_packet = run_dry_ingest(file, child_dsid, ingestor)
+        children.append({"dsid": child_dsid, "position": position, "packet": child_packet})
+
+    return {
+        "tier": 2,
+        "file": os.path.basename(file),
+        "parent_dsid": parent_dsid,
+        "parent_packet": parent_packet,
+        "children": children,
+    }
+
+
 def list_ingestors() -> list[str]:
     raw = client.ingestions.list_ingestors() or []
     result = []

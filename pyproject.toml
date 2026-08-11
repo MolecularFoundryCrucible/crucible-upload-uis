@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "crucible-ingestion",
     "flask>=3.0",
     "h5py>=3.0",
     "nano-crucible==3.1",
@@ -14,3 +15,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "qrcode>=8.2",
 ]
+
+[tool.uv.sources]
+crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }

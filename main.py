@@ -78,6 +78,7 @@ def _drain(q: queue.Queue):
 def index():
     return render_template("index.html",
                            print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
+                           dry_run=conf.DRY_RUN,
                            crucible_version=crucible.__version__,
                            instruments=registry.INSTRUMENTS,
                            panel_templates=registry.PANEL_TEMPLATES,
@@ -140,6 +141,7 @@ EDITABLE_FIELDS = {
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
     "ACCEPTABLE_FILE_TYPES": "set_str",
+    "DRY_RUN": "bool",
 }
 
 
@@ -382,6 +384,7 @@ def do_upload():
     session_dsid = data.get("session_dsid", None)
     comments = data.get("comments", "").strip()
     kw_list = data.get("keywords", []) or extract_keywords(comments, instrument_name)
+    dry_run = data.get("dry_run", conf.DRY_RUN)
 
     # Non-session mode: caller sends a list of file paths; session mode: a single folder path.
     # Per-instrument IS_SESSION overrides the global config default.
@@ -451,6 +454,13 @@ def do_upload():
     #   out per-file upload_dataset sub-flows; UI shows the project page.
     if len(session_folder_paths) == 1:
         path = session_folder_paths[0]
+        if dry_run:
+            try:
+                packet = backend.run_dry_ingest(path, "xxx", ingestor or "")
+                return jsonify({"dry_run": True, "results": [{"tier": 1, "file": os.path.basename(path), "packet": packet}]})
+            except Exception as e:
+                backend.logger.error(e)
+                return jsonify({"error": str(e)}), 500
         try:
             valid_dsids = backend.existing_dsids(orcid, project_id)
             dsid, _ = backend.resolve_dsid_for_file(path, valid_dsids)
@@ -480,6 +490,16 @@ def do_upload():
 
     # Generic multi-file path: fire one multi_file_upload run; it handles SHA
     # dedup and fans out per-file upload_dataset sub-flows.
+    if dry_run:
+        results = []
+        for path in session_folder_paths:
+            try:
+                packet = backend.run_dry_ingest(path, "xxx", ingestor or "")
+                results.append({"tier": 1, "file": os.path.basename(path), "packet": packet})
+            except Exception as e:
+                backend.logger.error(e)
+                return jsonify({"error": f"Dry run failed for {os.path.basename(path)}: {e}"}), 500
+        return jsonify({"dry_run": True, "results": results})
     try:
         flow_run = run_deployment(
             "multi-file-upload/multi-file-upload",
@@ -578,6 +598,7 @@ def multi_assignment_upload():
     kw_list = data.get("kw_list") or []
     comments = data.get("comments") or None
     assignments = data.get("assignments") or []
+    dry_run = data.get("dry_run", conf.DRY_RUN)
 
     if not orcid or not project_id:
         return jsonify({"error": "orcid and project_id required"}), 400
@@ -605,6 +626,10 @@ def multi_assignment_upload():
                       kw_list=kw_list, comments=comments, ingestor=ingestor)
         try:
             if upload_mode == "flat_multi":
+                if dry_run:
+                    packet = backend.run_dry_ingest(file_path, "xxx", ingestor or "")
+                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "tier": 1, "packet": packet})
+                    continue
                 sample_uuids = item.get("sample_uuids") or []
                 flow_run = run_deployment(
                     "flat-multi-upload/flat-multi-upload",
@@ -617,6 +642,12 @@ def multi_assignment_upload():
                 parent_uuid = item.get("parent_uuid") or ""
                 child_uuids = item.get("child_uuids") or []
                 child_positions = item.get("child_positions") or []
+                if dry_run:
+                    result = backend.dry_run_parent_child(
+                        file_path, parent_uuid, child_uuids, child_positions,
+                        project_id, orcid, instrument_name, kw_list, comments, ingestor or "")
+                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, **result})
+                    continue
                 flow_run = run_deployment(
                     "parent-child-upload/parent-child-upload",
                     parameters={"file": file_path, "parent_sample_uuid": parent_uuid,
@@ -627,6 +658,10 @@ def multi_assignment_upload():
                 submitted.append({"file": os.path.basename(file_path), "flow_run_id": str(flow_run.id)})
 
             else:  # 'single'
+                if dry_run:
+                    packet = backend.run_dry_ingest(file_path, "xxx", ingestor or "")
+                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "tier": 1, "packet": packet})
+                    continue
                 sample_uuids = item.get("sample_uuids") or []
                 link_samples = bool(item.get("link_samples", False))
                 dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
@@ -645,6 +680,28 @@ def multi_assignment_upload():
             return jsonify({"error": str(e)}), 500
 
     return jsonify({"submitted": submitted})
+
+
+@app.post("/api/upload/push_ingest")
+def push_ingest():
+    data = request.json or {}
+    dsids = data.get("dsids") or []
+    ingestor = (data.get("ingestor") or "").strip() or None
+    if not dsids:
+        return jsonify({"error": "dsids required"}), 400
+    results = []
+    for dsid in dsids:
+        try:
+            files = backend.client.datasets.list_files(dsid)
+            if not files:
+                return jsonify({"error": f"No files found for dataset {dsid}"}), 404
+            mfid = files[0]["mfid"]
+            backend.client.files.request_ingestion(mfid, ingestion_class=ingestor)
+            results.append({"dsid": dsid, "mfid": mfid, "ok": True})
+        except Exception as e:
+            backend.logger.error(e)
+            return jsonify({"error": f"Ingestion trigger failed for {dsid}: {e}"}), 500
+    return jsonify({"results": results})
 
 
 if __name__ == "__main__":

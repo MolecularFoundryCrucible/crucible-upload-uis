@@ -678,6 +678,8 @@ def multi_assignment_upload():
 
 
 if __name__ == "__main__":
+    _write_config({"DRY_RUN": False})
+
     # Flask runs in a daemon thread; tkinter mainloop holds the main thread.
     port = int(os.environ.get("FLASK_PORT", 5000))
     flask_thread = threading.Thread(

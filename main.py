@@ -587,26 +587,43 @@ def resolve_holders():
     return jsonify({"files": files})
 
 
+def _next_carrier_name(project_id: str) -> str:
+    import re
+    existing = backend.client.samples.list(project_id=project_id)
+    nums = [int(m.group(1)) for s in existing
+            if (m := re.match(r'CAR(\d+)$', s.get("sample_name", "")))]
+    return f"CAR{((max(nums) + 1) if nums else 1):06d}"
+
+
+@app.get("/api/photobox/next_carrier_name")
+def photobox_next_carrier_name():
+    project_id = (request.args.get("project_id") or "").strip()
+    if not project_id:
+        return jsonify({"error": "project_id required"}), 400
+    try:
+        return jsonify({"sample_name": _next_carrier_name(project_id)})
+    except Exception as e:
+        backend.logger.error(f"next_carrier_name failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.post("/api/photobox/create_carrier")
 def photobox_create_carrier():
-    import re
     data = request.json or {}
     project_id = (data.get("project_id") or "").strip()
     orcid = (data.get("orcid") or "").strip()
+    name = (data.get("sample_name") or "").strip()
     description = (data.get("description") or "").strip() or None
     if not project_id or not orcid:
         return jsonify({"error": "project_id and orcid required"}), 400
     try:
-        existing = backend.client.samples.list(project_id=project_id)
-        nums = [int(m.group(1)) for s in existing
-                if (m := re.match(r'CAR-(\d+)$', s.get("sample_name", "")))]
-        next_num = (max(nums) + 1) if nums else 1
-        name = f"CAR-{next_num:03d}"
+        if not name:
+            name = _next_carrier_name(project_id)
         result = backend.create_sample(
             sample_name=name,
             owner_orcid=orcid,
             project_id=project_id,
-            sample_type="carrier",
+            sample_type="thin film carrier",
             description=description,
         )
         return jsonify(result)

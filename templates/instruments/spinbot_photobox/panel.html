@@ -12,7 +12,7 @@
         <input id="pb-carrier-uuid" type="text" class="form-control font-monospace"
                placeholder="Carrier UUID or name" />
         <button class="btn btn-outline-secondary" type="button" onclick="pbLookupCarrier()">Lookup</button>
-        <button class="btn btn-outline-primary" type="button" onclick="pbCreateCarrier()">New Carrier</button>
+        <button class="btn btn-outline-primary" type="button" onclick="pbQueueNewCarrier()">New Carrier</button>
       </div>
       <div class="small text-muted">Name: <span id="pb-carrier-name" class="fw-semibold text-dark">—</span></div>
     </div>
@@ -52,7 +52,7 @@
   window._instrumentPanelParsers  = window._instrumentPanelParsers  || {};
 
   let _pb = {
-    carrierUuid: '', carrierName: '',
+    carrierUuid: '', carrierName: '', pendingNewCarrier: false,
     tray1Uuid: '', tray2Uuid: '',
     tray1Samples: [], tray2Samples: [],
   };
@@ -60,6 +60,7 @@
   function _pbSetCarrier(uuid, name) {
     _pb.carrierUuid = uuid;
     _pb.carrierName = name;
+    _pb.pendingNewCarrier = false;
     document.getElementById('pb-carrier-uuid').value = uuid;
     document.getElementById('pb-carrier-name').textContent = name || '—';
   }
@@ -76,8 +77,8 @@
   }
 
   function _pbClear() {
-    _pb = { carrierUuid: '', carrierName: '', tray1Uuid: '', tray2Uuid: '',
-            tray1Samples: [], tray2Samples: [] };
+    _pb = { carrierUuid: '', carrierName: '', pendingNewCarrier: false,
+            tray1Uuid: '', tray2Uuid: '', tray1Samples: [], tray2Samples: [] };
     document.getElementById('pb-carrier-uuid').value = '';
     document.getElementById('pb-carrier-name').textContent = '—';
     document.getElementById('pb-tray1-uuid').value = '';
@@ -111,25 +112,23 @@
     }
   };
 
-  window.pbCreateCarrier = async function () {
+  window.pbQueueNewCarrier = async function () {
     const project_id = document.getElementById('project').value;
-    const orcid = state.orcid;
-    if (!project_id || !orcid) {
-      showStatus('Select a project and look up a user first.', 'warning'); return;
+    if (!project_id) {
+      showStatus('Select a project first.', 'warning'); return;
     }
     document.getElementById('pb-spinner').classList.remove('d-none');
     try {
-      const res = await fetch('/api/photobox/create_carrier', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({project_id, orcid}),
-      });
+      const res = await fetch(`/api/photobox/next_carrier_name?project_id=${encodeURIComponent(project_id)}`);
       const data = await res.json();
-      if (!res.ok) { showStatus(data.error || 'Failed to create carrier.', 'danger'); return; }
-      _pbSetCarrier(data.unique_id, data.sample_name);
-      showStatus(`Created carrier ${data.sample_name}`, 'success');
+      if (!res.ok) { showStatus(data.error || 'Failed to get carrier name.', 'danger'); return; }
+      _pb.pendingNewCarrier = true;
+      _pb.carrierUuid = '';
+      _pb.carrierName = data.sample_name;
+      document.getElementById('pb-carrier-uuid').value = '';
+      document.getElementById('pb-carrier-name').textContent = data.sample_name + ' (will be created on upload)';
     } catch (e) {
-      showStatus('Create carrier error: ' + e.message, 'danger');
+      showStatus('Error: ' + e.message, 'danger');
     } finally {
       document.getElementById('pb-spinner').classList.add('d-none');
     }
@@ -167,7 +166,7 @@
     if (!orcid || !project_id) {
       showStatus('Select a project and look up a user first.', 'warning'); return;
     }
-    if (!_pb.carrierUuid) {
+    if (!_pb.carrierUuid && !_pb.pendingNewCarrier) {
       showStatus('Look up or create a carrier first.', 'warning'); return;
     }
     if (!file) {
@@ -180,6 +179,20 @@
     spinner.classList.remove('d-none');
     btn.disabled = true;
     try {
+      if (_pb.pendingNewCarrier) {
+        const cr = await fetch('/api/photobox/create_carrier', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({project_id, orcid, sample_name: _pb.carrierName}),
+        });
+        const cd = await cr.json();
+        if (!cr.ok) { showStatus(cd.error || 'Failed to create carrier.', 'danger'); return; }
+        _pb.carrierUuid = cd.unique_id;
+        _pb.carrierName = cd.sample_name;
+        _pb.pendingNewCarrier = false;
+        document.getElementById('pb-carrier-name').textContent = cd.sample_name;
+      }
+
       const res = await fetch('/api/photobox/upload', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},

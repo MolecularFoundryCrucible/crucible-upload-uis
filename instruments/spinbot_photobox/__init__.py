@@ -1,0 +1,9 @@
+NAME = 'spinbot_photobox'
+INGESTOR = ''
+UI_MODE = 'photobox'
+HOLDER_LAYOUTS = {}
+DEFAULT_HOLDER_LAYOUT = ''
+FLOW = 'photobox-upload/photobox-upload'
+POST_PROCESSING = ['carrier_segmentation']
+PANEL_TEMPLATE = 'instruments/spinbot_photobox/panel.html'
+FILE_PARSER = None

@@ -697,6 +697,48 @@ def flat_multi_upload(file: str,
     return dsids
 
 
+@flow(flow_run_name=_run_name("photobox"))
+def photobox_upload(file: str,
+                    carrier_uuid: str,
+                    tray1_uuid: str,
+                    tray2_uuid: str,
+                    sample_uuids: list[str],
+                    project_id: str,
+                    orcid: str,
+                    instrument_name: str = "spinbot_photobox",
+                    kw_list: list[str] = [],
+                    comments: str | None = None) -> str:
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
+    logger = get_run_logger()
+
+    for tray_uuid in [tray1_uuid, tray2_uuid]:
+        if tray_uuid:
+            client.samples.link(carrier_uuid, tray_uuid)
+            logger.info(f"Linked carrier {carrier_uuid} → tray {tray_uuid}")
+
+    new_dsid = create_dataset(files=[file],
+                              instrument_name=instrument_name,
+                              project_id=project_id,
+                              orcid=orcid,
+                              kw_list=kw_list,
+                              comments=comments)
+
+    all_uuids = [carrier_uuid] + [u for u in sample_uuids if u]
+    link_dataset_and_sample(new_dsid, all_uuids)
+    logger.info(f"Linked dataset {new_dsid} to carrier + {len(sample_uuids)} thin films")
+
+    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
+    if CHAIN_POST_PROCESSING:
+        for name in requests:
+            request_post_processing(name, new_dsid)
+    else:
+        for name in requests:
+            request_post_processing.submit(name, new_dsid)
+
+    return new_dsid
+
+
 @flow(flow_run_name=_run_name("parent-child"))
 def parent_child_upload(file: str,
                         parent_sample_uuid: str,

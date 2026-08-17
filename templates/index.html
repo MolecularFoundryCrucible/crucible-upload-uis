@@ -212,6 +212,10 @@
         <span id="spinner-ma-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Confirm &amp; Upload
       </button>
+      <button id="btn-pb-upload" class="btn btn-success btn-lg px-5 d-none" onclick="pbUpload()">
+        <span id="spinner-pb-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
+        Upload
+      </button>
       <button id="btn-upload" class="btn btn-primary btn-lg px-5" onclick="doUpload()">
         <span id="spinner-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Upload
@@ -1072,7 +1076,7 @@
       document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment || isPhotobox);
       document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
-      document.getElementById("file-section-card").classList.toggle("d-none", isPhotobox);
+      document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
 
       if (!isMultiAssignment && !isPhotobox) {
         _clearNirvanaUI();

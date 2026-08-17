@@ -706,7 +706,7 @@ def photobox_upload(file: str,
                     project_id: str,
                     orcid: str,
                     instrument_name: str = "spinbot_photobox",
-                    kw_list: list[str] = [],
+                    kw_list: list[str] | None = None,
                     comments: str | None = None) -> str:
     from instruments.registry import POST_PROCESSING_REQUESTS
     from instrument_conf import CHAIN_POST_PROCESSING
@@ -721,7 +721,7 @@ def photobox_upload(file: str,
                               instrument_name=instrument_name,
                               project_id=project_id,
                               orcid=orcid,
-                              kw_list=kw_list,
+                              kw_list=kw_list or [],
                               comments=comments)
 
     all_uuids = [carrier_uuid] + [u for u in sample_uuids if u]

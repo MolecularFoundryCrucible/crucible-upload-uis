@@ -18,7 +18,7 @@
     </div>
 
     <!-- Tray grids side by side -->
-    <div class="row g-2 mb-3 flex-grow-1 overflow-auto">
+    <div class="row g-2 flex-grow-1 overflow-auto">
       <div class="col-6">
         <div class="border rounded p-2 h-100">
           <label class="fw-semibold small d-block mb-1">Tray 1</label>
@@ -42,33 +42,19 @@
         </div>
       </div>
     </div>
-
-    <!-- Photo section -->
-    <div class="border rounded p-2 mb-3">
-      <label class="fw-semibold small d-block mb-1">Carrier Photo</label>
-      <div class="d-flex align-items-center gap-2">
-        <button class="btn btn-outline-secondary btn-sm flex-shrink-0" type="button" onclick="pbBrowsePhoto()">Browse Photo…</button>
-        <span id="pb-photo-path" class="small text-muted text-truncate">No photo selected</span>
-      </div>
-    </div>
-
-    <!-- Upload button -->
-    <button id="btn-pb-upload" class="btn btn-success" onclick="pbUpload()">
-      <span id="spinner-pb-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
-      Upload
-    </button>
   </div>
 </div>
 
 <script>
 (function () {
+  window._instrumentPanelBuilders = window._instrumentPanelBuilders || {};
   window._instrumentPanelClearers = window._instrumentPanelClearers || {};
+  window._instrumentPanelParsers  = window._instrumentPanelParsers  || {};
 
   let _pb = {
     carrierUuid: '', carrierName: '',
     tray1Uuid: '', tray2Uuid: '',
     tray1Samples: [], tray2Samples: [],
-    photoFile: '',
   };
 
   function _pbSetCarrier(uuid, name) {
@@ -91,18 +77,18 @@
 
   function _pbClear() {
     _pb = { carrierUuid: '', carrierName: '', tray1Uuid: '', tray2Uuid: '',
-            tray1Samples: [], tray2Samples: [], photoFile: '' };
-    const el = id => document.getElementById(id);
-    el('pb-carrier-uuid').value = '';
-    el('pb-carrier-name').textContent = '—';
-    el('pb-tray1-uuid').value = '';
-    el('pb-tray2-uuid').value = '';
-    el('pb-photo-path').textContent = 'No photo selected';
+            tray1Samples: [], tray2Samples: [] };
+    document.getElementById('pb-carrier-uuid').value = '';
+    document.getElementById('pb-carrier-name').textContent = '—';
+    document.getElementById('pb-tray1-uuid').value = '';
+    document.getElementById('pb-tray2-uuid').value = '';
     _pbRenderTray('pb-tray1-grid', []);
     _pbRenderTray('pb-tray2-grid', []);
   }
 
+  window._instrumentPanelBuilders['spinbot_photobox'] = function () {};
   window._instrumentPanelClearers['spinbot_photobox'] = _pbClear;
+  window._instrumentPanelParsers['spinbot_photobox']  = function () {};
 
   window.pbLookupCarrier = async function () {
     const query = document.getElementById('pb-carrier-uuid').value.trim();
@@ -150,8 +136,7 @@
   };
 
   window.pbResolveTray = async function (num) {
-    const uuidEl = document.getElementById(`pb-tray${num}-uuid`);
-    const uuid = uuidEl.value.trim();
+    const uuid = document.getElementById(`pb-tray${num}-uuid`).value.trim();
     if (!uuid) { showStatus(`Enter a UUID for Tray ${num}.`, 'warning'); return; }
     document.getElementById('pb-spinner').classList.remove('d-none');
     try {
@@ -173,26 +158,11 @@
     }
   };
 
-  window.pbBrowsePhoto = async function () {
-    document.getElementById('pb-spinner').classList.remove('d-none');
-    try {
-      const res = await fetch('/api/browse');
-      const data = await res.json();
-      if (data.paths && data.paths.length) {
-        _pb.photoFile = data.paths[0];
-        document.getElementById('pb-photo-path').textContent = data.paths[0].split(/[\\/]/).pop();
-      }
-    } catch (e) {
-      showStatus('Browse error: ' + e.message, 'danger');
-    } finally {
-      document.getElementById('pb-spinner').classList.add('d-none');
-    }
-  };
-
   window.pbUpload = async function () {
     const project_id = document.getElementById('project').value;
     const orcid = state.orcid;
     const instrument_name = document.getElementById('instrument').value;
+    const file = state.selectedPaths && state.selectedPaths[0];
 
     if (!orcid || !project_id) {
       showStatus('Select a project and look up a user first.', 'warning'); return;
@@ -200,7 +170,7 @@
     if (!_pb.carrierUuid) {
       showStatus('Look up or create a carrier first.', 'warning'); return;
     }
-    if (!_pb.photoFile) {
+    if (!file) {
       showStatus('Browse and select a photo file first.', 'warning'); return;
     }
 
@@ -210,20 +180,18 @@
     spinner.classList.remove('d-none');
     btn.disabled = true;
     try {
-      const kw_list = typeof getKeywords === 'function' ? getKeywords() : [];
-      const comments = (document.getElementById('comments') || {}).value?.trim() || null;
       const res = await fetch('/api/photobox/upload', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           orcid, project_id, instrument_name,
-          file: _pb.photoFile,
+          file,
           carrier_uuid: _pb.carrierUuid,
           tray1_uuid: _pb.tray1Uuid,
           tray2_uuid: _pb.tray2Uuid,
           sample_uuids: allTfUuids,
-          kw_list,
-          comments,
+          kw_list: getKeywords(),
+          comments: document.getElementById('comments').value.trim() || null,
         }),
       });
       const data = await res.json();

@@ -174,10 +174,11 @@
     }
 
     const allTfUuids = [..._pb.tray1Samples, ..._pb.tray2Samples].map(s => s.unique_id).filter(Boolean);
-    const spinner = document.getElementById('spinner-pb-upload');
     const btn = document.getElementById('btn-pb-upload');
-    spinner.classList.remove('d-none');
     btn.disabled = true;
+    resetUploadModal();
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('upload-modal'));
+    modal.show();
     try {
       if (_pb.pendingNewCarrier) {
         const cr = await fetch('/api/photobox/create_carrier', {
@@ -186,7 +187,12 @@
           body: JSON.stringify({project_id, orcid, sample_name: _pb.carrierName}),
         });
         const cd = await cr.json();
-        if (!cr.ok) { showStatus(cd.error || 'Failed to create carrier.', 'danger'); return; }
+        if (!cr.ok) {
+          document.getElementById('submitting-section').classList.add('d-none');
+          document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+          document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+          return;
+        }
         _pb.carrierUuid = cd.unique_id;
         _pb.carrierName = cd.sample_name;
         _pb.pendingNewCarrier = false;
@@ -208,12 +214,24 @@
         }),
       });
       const data = await res.json();
-      if (!res.ok) { showStatus(data.error || 'Upload failed.', 'danger'); return; }
-      showStatus('Upload submitted — flow run ID: ' + data.flow_run_id, 'success');
+      document.getElementById('submitting-section').classList.add('d-none');
+      if (res.ok) {
+        document.getElementById('upload-modal-title').textContent = 'Upload running';
+        document.getElementById('upload-modal-header').classList.add('bg-success', 'text-white');
+        document.getElementById('success-section').classList.remove('d-none');
+        document.getElementById('prefect-link').href =
+          'http://127.0.0.1:4200/flow-runs/flow-run/' + data.flow_run_id;
+        document.getElementById('crucible-link').href =
+          `https://crucible.lbl.gov/explore/${data.project_id}/#tab=datasets`;
+      } else {
+        document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+        document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+      }
     } catch (e) {
-      showStatus('Upload error: ' + e.message, 'danger');
+      document.getElementById('submitting-section').classList.add('d-none');
+      document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+      document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
     } finally {
-      spinner.classList.add('d-none');
       btn.disabled = false;
     }
   };

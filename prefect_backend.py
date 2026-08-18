@@ -307,7 +307,9 @@ def create_dataset(files: list[str],
                    ingestor: str | None = None,
                    excluded_uuids: list[str] = [],
                    position: str | None = None,
-                   mark_as_parent: bool = False) -> str:
+                   mark_as_parent: bool = False,
+                   dataset_name: str | None = None,
+                   measurement: str | None = None) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -316,6 +318,8 @@ def create_dataset(files: list[str],
         project_id=project_id,
         instrument_name=instrument_name,
         session_name=session_name,
+        dataset_name=dataset_name,
+        measurement=measurement,
     ).items() if v is not None}
     ds = BaseDataset(**ds_kwargs)
     scimd = {'comments': comments} if comments else {}
@@ -722,7 +726,9 @@ def photobox_upload(file: str,
                               project_id=project_id,
                               orcid=orcid,
                               kw_list=kw_list or [],
-                              comments=comments)
+                              comments=comments,
+                              dataset_name=f"{Path(file).stem} Carrier Image",
+                              measurement="thin film carrier image")
 
     all_uuids = [carrier_uuid] + [u for u in sample_uuids if u]
     link_dataset_and_sample(new_dsid, all_uuids)

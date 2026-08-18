@@ -2,9 +2,12 @@
 Backend functions for the Crucible upload UI.
 Replace these stubs with your real implementations.
 """
+import os
 import re
+import tempfile
 from pathlib import Path
 import subprocess as sp
+import h5py
 from crucible import CrucibleClient
 from crucible.models import Dataset as BaseDataset
 import logging
@@ -436,6 +439,54 @@ def request_post_processing(name: str, new_ds_dsid: str):
     return getattr(client.datasets, f"request_{name}")(new_ds_dsid)
 
 
+def _split_h5_position(source_path: str, position_label: str, output_dir: str) -> str:
+    """Split a Nirvana h5 into a single-position file. Returns the output path."""
+    with h5py.File(source_path, 'r') as src:
+        meas_name = next(iter(src['measurement'].keys()))
+        meas_src = src['measurement'][meas_name]
+        is_spec_run = meas_name.endswith('_spec_run')
+
+        if is_spec_run:
+            dtype_key = next(k for k in meas_src.keys()
+                             if k != 'settings' and 'positions' in meas_src[k])
+            pos_keys = sorted(meas_src[dtype_key]['positions'].keys())
+        else:
+            pos_keys = sorted(meas_src['positions'].keys())
+
+        pos_key = pos_keys[int(position_label[1:]) - 1]
+        output_path = os.path.join(output_dir, f"{Path(source_path).stem}_{pos_key}.h5")
+
+        with h5py.File(output_path, 'w') as dst:
+            src.copy('app', dst)
+            src.copy('hardware', dst)
+            dst_meas = dst.require_group(f'measurement/{meas_name}')
+            dst_meas.attrs.update(meas_src.attrs)
+
+            if 'settings' in meas_src:
+                meas_src.copy('settings', dst_meas)
+
+            if is_spec_run:
+                for dk in meas_src.keys():
+                    if dk == 'settings':
+                        continue
+                    dtype_grp = meas_src[dk]
+                    if not hasattr(dtype_grp, 'keys') or 'positions' not in dtype_grp:
+                        continue
+                    dst_dtype = dst_meas.require_group(dk)
+                    dst_dtype.attrs.update(dtype_grp.attrs)
+                    for key in dtype_grp.keys():
+                        if key != 'positions':
+                            dtype_grp.copy(key, dst_dtype)
+                    dtype_grp.copy(f'positions/{pos_key}', dst_dtype.require_group('positions'))
+            else:
+                for key in meas_src.keys():
+                    if key not in ('positions', 'settings'):
+                        meas_src.copy(key, dst_meas)
+                meas_src.copy(f'positions/{pos_key}', dst_meas.require_group('positions'))
+
+    return output_path
+
+
 def _run_name(prefix):
     def generate():
         from prefect.runtime import flow_run
@@ -768,20 +819,25 @@ def parent_child_upload(file: str,
     link_dataset_and_sample(parent_dsid, parent_sample_uuid)
     logger.info(f"Created parent dataset {parent_dsid}, linked to {parent_sample_uuid}")
 
-    for i, child_uuid in enumerate(child_sample_uuids):
-        position = child_positions[i] if i < len(child_positions) else None
-        child_dsid = create_dataset(files=[file], instrument_name=instrument_name,
-                                    project_id=project_id, orcid=orcid,
-                                    kw_list=kw_list, comments=comments, ingestor=ingestor,
-                                    position=position)
-        link_dataset_and_sample(child_dsid, child_uuid)
-        link_dataset_to_session(child_dsid, parent_dsid)
-        logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}, position={position}")
-        if CHAIN_POST_PROCESSING:
-            for name in requests:
-                request_post_processing(name, child_dsid)
-        else:
-            for name in requests:
-                request_post_processing.submit(name, child_dsid)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, child_uuid in enumerate(child_sample_uuids):
+            position = child_positions[i] if i < len(child_positions) else None
+            if position:
+                child_file = _split_h5_position(file, position, tmpdir)
+            else:
+                child_file = file
+            child_dsid = create_dataset(files=[child_file], instrument_name=instrument_name,
+                                        project_id=project_id, orcid=orcid,
+                                        kw_list=kw_list, comments=comments, ingestor=ingestor,
+                                        position=position)
+            link_dataset_and_sample(child_dsid, child_uuid)
+            link_dataset_to_session(child_dsid, parent_dsid)
+            logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}, position={position}")
+            if CHAIN_POST_PROCESSING:
+                for name in requests:
+                    request_post_processing(name, child_dsid)
+            else:
+                for name in requests:
+                    request_post_processing.submit(name, child_dsid)
 
     return parent_dsid

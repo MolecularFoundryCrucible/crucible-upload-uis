@@ -750,7 +750,7 @@ def multi_assignment_upload():
                     continue
                 sample_uuids = item.get("sample_uuids") or []
                 link_samples = bool(item.get("link_samples", False))
-                dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+                dsid = backend.read_h5_dsid(file_path) or backend.resolve_dsid_for_file(file_path, valid_dsids)[0]
                 flow_run = run_deployment(
                     "multi-assignment-upload/multi-assignment-upload",
                     parameters={"file": file_path, "sample_uuids": sample_uuids,

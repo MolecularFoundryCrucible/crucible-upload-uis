@@ -265,6 +265,20 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
     return mfid.mfid()[0], False
 
 
+def read_h5_dsid(file_path: str) -> str | None:
+    """Return the Crucible dataset ID embedded in an h5 file's root attrs, or None."""
+    if not file_path.endswith('.h5'):
+        return None
+    try:
+        with h5py.File(file_path, 'r') as f:
+            uid = f.attrs.get('unique_id')
+            if uid is None:
+                return None
+            return uid.decode() if isinstance(uid, bytes) else str(uid)
+    except Exception:
+        return None
+
+
 def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None,
                            max_workers: int = 8) -> list[tuple[str, bool]]:
     """resolve_dsid_for_file for each file, in parallel. The lookups are I/O-bound

@@ -644,6 +644,7 @@ def photobox_upload_endpoint():
     tray1_uuid = (data.get("tray1_uuid") or "").strip()
     tray2_uuid = (data.get("tray2_uuid") or "").strip()
     sample_uuids = data.get("sample_uuids") or []
+    sample_positions = data.get("sample_positions") or {}
     kw_list = data.get("kw_list") or []
     comments = data.get("comments") or None
 
@@ -665,6 +666,7 @@ def photobox_upload_endpoint():
                 "tray1_uuid": tray1_uuid,
                 "tray2_uuid": tray2_uuid,
                 "sample_uuids": sample_uuids,
+                "sample_positions": sample_positions,
                 "project_id": project_id,
                 "orcid": orcid,
                 "instrument_name": instrument_name,

@@ -173,7 +173,12 @@
       showStatus('Browse and select a photo file first.', 'warning'); return;
     }
 
-    const allTfUuids = [..._pb.tray1Samples, ..._pb.tray2Samples].map(s => s.unique_id).filter(Boolean);
+    const TRAY1_POSITIONS = ['A1','A2','A3','A4','B1','B2','B3','B4'];
+    const TRAY2_POSITIONS = ['C1','C2','C3','C4','D1','D2','D3','D4'];
+    const samplePositions = {};
+    _pb.tray1Samples.forEach((s, i) => { if (i < TRAY1_POSITIONS.length) samplePositions[TRAY1_POSITIONS[i]] = s.unique_id || ''; });
+    _pb.tray2Samples.forEach((s, i) => { if (i < TRAY2_POSITIONS.length) samplePositions[TRAY2_POSITIONS[i]] = s.unique_id || ''; });
+    const allTfUuids = Object.values(samplePositions).filter(Boolean);
     const btn = document.getElementById('btn-pb-upload');
     btn.disabled = true;
     resetUploadModal();
@@ -209,6 +214,7 @@
           tray1_uuid: _pb.tray1Uuid,
           tray2_uuid: _pb.tray2Uuid,
           sample_uuids: allTfUuids,
+          sample_positions: samplePositions,
           kw_list: getKeywords(),
           comments: document.getElementById('comments').value.trim() || null,
         }),

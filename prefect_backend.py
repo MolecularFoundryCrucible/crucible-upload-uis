@@ -326,7 +326,8 @@ def create_dataset(files: list[str],
                    position: str | None = None,
                    mark_as_parent: bool = False,
                    dataset_name: str | None = None,
-                   measurement: str | None = None) -> str:
+                   measurement: str | None = None,
+                   sample_positions: dict | None = None) -> str:
     logger = get_run_logger()
 
     ds_kwargs = {k: v for k, v in dict(
@@ -346,6 +347,8 @@ def create_dataset(files: list[str],
         scimd['position'] = position
     if mark_as_parent:
         scimd['upload_mode'] = 'parent'
+    if sample_positions:
+        scimd['sample_positions'] = sample_positions
     try:
         new_ds = client.datasets.create(
             ds,
@@ -776,7 +779,8 @@ def photobox_upload(file: str,
                     orcid: str,
                     instrument_name: str = "spinbot_photobox",
                     kw_list: list[str] | None = None,
-                    comments: str | None = None) -> str:
+                    comments: str | None = None,
+                    sample_positions: dict | None = None) -> str:
     from instruments.registry import POST_PROCESSING_REQUESTS
     from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
@@ -793,7 +797,8 @@ def photobox_upload(file: str,
                               kw_list=kw_list or [],
                               comments=comments,
                               dataset_name=f"{Path(file).stem} Carrier Image",
-                              measurement="thin film carrier image")
+                              measurement="thin film carrier image",
+                              sample_positions=sample_positions or {})
 
     all_uuids = [carrier_uuid] + [u for u in sample_uuids if u]
     link_dataset_and_sample(new_dsid, all_uuids)

@@ -1,0 +1,245 @@
+<div class="card h-100 shadow-sm" style="border-top-color: #fd7e14;">
+  <div class="card-body d-flex flex-column">
+    <div class="d-flex align-items-center justify-content-between mb-3">
+      <h5 class="card-title mb-0" style="color:#fd7e14;">Carrier Photo Upload</h5>
+      <span id="pb-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
+    </div>
+
+    <!-- Carrier section -->
+    <div class="border rounded p-2 mb-3">
+      <label class="fw-semibold small d-block mb-1">Carrier</label>
+      <div class="input-group input-group-sm mb-1">
+        <input id="pb-carrier-uuid" type="text" class="form-control font-monospace"
+               placeholder="Carrier UUID or name" />
+        <button class="btn btn-outline-secondary" type="button" onclick="pbLookupCarrier()">Lookup</button>
+        <button class="btn btn-outline-primary" type="button" onclick="pbQueueNewCarrier()">New Carrier</button>
+      </div>
+      <div class="small text-muted">Name: <span id="pb-carrier-name" class="fw-semibold text-dark">—</span></div>
+    </div>
+
+    <!-- Tray grids side by side -->
+    <div class="row g-2 flex-grow-1 overflow-auto">
+      <div class="col-6">
+        <div class="border rounded p-2 h-100">
+          <label class="fw-semibold small d-block mb-1">Tray 1</label>
+          <div class="input-group input-group-sm mb-2">
+            <input id="pb-tray1-uuid" type="text" class="form-control font-monospace"
+                   placeholder="Tray UUID" />
+            <button class="btn btn-outline-secondary" type="button" onclick="pbResolveTray(1)">Resolve</button>
+          </div>
+          <div id="pb-tray1-grid" class="small text-muted">—</div>
+        </div>
+      </div>
+      <div class="col-6">
+        <div class="border rounded p-2 h-100">
+          <label class="fw-semibold small d-block mb-1">Tray 2</label>
+          <div class="input-group input-group-sm mb-2">
+            <input id="pb-tray2-uuid" type="text" class="form-control font-monospace"
+                   placeholder="Tray UUID" />
+            <button class="btn btn-outline-secondary" type="button" onclick="pbResolveTray(2)">Resolve</button>
+          </div>
+          <div id="pb-tray2-grid" class="small text-muted">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  window._instrumentPanelBuilders = window._instrumentPanelBuilders || {};
+  window._instrumentPanelClearers = window._instrumentPanelClearers || {};
+  window._instrumentPanelParsers  = window._instrumentPanelParsers  || {};
+
+  let _pb = {
+    carrierUuid: '', carrierName: '', pendingNewCarrier: false,
+    tray1Uuid: '', tray2Uuid: '',
+    tray1Samples: [], tray2Samples: [],
+  };
+
+  function _pbSetCarrier(uuid, name) {
+    _pb.carrierUuid = uuid;
+    _pb.carrierName = name;
+    _pb.pendingNewCarrier = false;
+    document.getElementById('pb-carrier-uuid').value = uuid;
+    document.getElementById('pb-carrier-name').textContent = name || '—';
+  }
+
+  function _pbRenderTray(gridId, samples) {
+    const el = document.getElementById(gridId);
+    if (!samples.length) { el.textContent = '—'; return; }
+    el.innerHTML = samples.map(s =>
+      `<div class="d-flex justify-content-between border-bottom py-1">
+        <span class="text-truncate me-1" title="${s.sample_name}">${s.sample_name || '—'}</span>
+        <span class="font-monospace text-muted" style="font-size:0.75em;">${(s.unique_id||'').slice(-8)}</span>
+      </div>`
+    ).join('');
+  }
+
+  function _pbClear() {
+    _pb = { carrierUuid: '', carrierName: '', pendingNewCarrier: false,
+            tray1Uuid: '', tray2Uuid: '', tray1Samples: [], tray2Samples: [] };
+    document.getElementById('pb-carrier-uuid').value = '';
+    document.getElementById('pb-carrier-name').textContent = '—';
+    document.getElementById('pb-tray1-uuid').value = '';
+    document.getElementById('pb-tray2-uuid').value = '';
+    _pbRenderTray('pb-tray1-grid', []);
+    _pbRenderTray('pb-tray2-grid', []);
+  }
+
+  window._instrumentPanelBuilders['spinbot_photobox'] = function () {};
+  window._instrumentPanelClearers['spinbot_photobox'] = _pbClear;
+  window._instrumentPanelParsers['spinbot_photobox']  = function () {};
+
+  window.pbLookupCarrier = async function () {
+    const query = document.getElementById('pb-carrier-uuid').value.trim();
+    if (!query) { showStatus('Enter a carrier UUID or name.', 'warning'); return; }
+    const project_id = document.getElementById('project').value;
+    document.getElementById('pb-spinner').classList.remove('d-none');
+    try {
+      const res = await fetch('/api/sample/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query, project_id}),
+      });
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || 'Carrier lookup failed.', 'danger'); return; }
+      _pbSetCarrier(data.unique_id, data.sample_name);
+    } catch (e) {
+      showStatus('Carrier lookup error: ' + e.message, 'danger');
+    } finally {
+      document.getElementById('pb-spinner').classList.add('d-none');
+    }
+  };
+
+  window.pbQueueNewCarrier = async function () {
+    const project_id = document.getElementById('project').value;
+    if (!project_id) {
+      showStatus('Select a project first.', 'warning'); return;
+    }
+    document.getElementById('pb-spinner').classList.remove('d-none');
+    try {
+      const res = await fetch(`/api/photobox/next_carrier_name?project_id=${encodeURIComponent(project_id)}`);
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || 'Failed to get carrier name.', 'danger'); return; }
+      _pb.pendingNewCarrier = true;
+      _pb.carrierUuid = '';
+      _pb.carrierName = data.sample_name;
+      document.getElementById('pb-carrier-uuid').value = '';
+      document.getElementById('pb-carrier-name').textContent = data.sample_name + ' (will be created on upload)';
+    } catch (e) {
+      showStatus('Error: ' + e.message, 'danger');
+    } finally {
+      document.getElementById('pb-spinner').classList.add('d-none');
+    }
+  };
+
+  window.pbResolveTray = async function (num) {
+    const uuid = document.getElementById(`pb-tray${num}-uuid`).value.trim();
+    if (!uuid) { showStatus(`Enter a UUID for Tray ${num}.`, 'warning'); return; }
+    document.getElementById('pb-spinner').classList.remove('d-none');
+    try {
+      const res = await fetch('/api/resolve_children', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sample_uuid: uuid}),
+      });
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || `Failed to resolve Tray ${num}.`, 'danger'); return; }
+      const samples = data.children || [];
+      if (num === 1) { _pb.tray1Uuid = uuid; _pb.tray1Samples = samples; }
+      else            { _pb.tray2Uuid = uuid; _pb.tray2Samples = samples; }
+      _pbRenderTray(`pb-tray${num}-grid`, samples);
+    } catch (e) {
+      showStatus(`Tray ${num} resolve error: ` + e.message, 'danger');
+    } finally {
+      document.getElementById('pb-spinner').classList.add('d-none');
+    }
+  };
+
+  window.pbUpload = async function () {
+    const project_id = document.getElementById('project').value;
+    const orcid = state.orcid;
+    const instrument_name = document.getElementById('instrument').value;
+    const file = state.selectedPaths && state.selectedPaths[0];
+
+    if (!orcid || !project_id) {
+      showStatus('Select a project and look up a user first.', 'warning'); return;
+    }
+    if (!_pb.carrierUuid && !_pb.pendingNewCarrier) {
+      showStatus('Look up or create a carrier first.', 'warning'); return;
+    }
+    if (!file) {
+      showStatus('Browse and select a photo file first.', 'warning'); return;
+    }
+
+    const TRAY1_POSITIONS = ['A1','A2','A3','A4','B1','B2','B3','B4'];
+    const TRAY2_POSITIONS = ['C1','C2','C3','C4','D1','D2','D3','D4'];
+    const samplePositions = {};
+    _pb.tray1Samples.forEach((s, i) => { if (i < TRAY1_POSITIONS.length) samplePositions[TRAY1_POSITIONS[i]] = s.unique_id || ''; });
+    _pb.tray2Samples.forEach((s, i) => { if (i < TRAY2_POSITIONS.length) samplePositions[TRAY2_POSITIONS[i]] = s.unique_id || ''; });
+    const allTfUuids = Object.values(samplePositions).filter(Boolean);
+    const btn = document.getElementById('btn-pb-upload');
+    btn.disabled = true;
+    resetUploadModal();
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('upload-modal'));
+    modal.show();
+    try {
+      if (_pb.pendingNewCarrier) {
+        const cr = await fetch('/api/photobox/create_carrier', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({project_id, orcid, sample_name: _pb.carrierName}),
+        });
+        const cd = await cr.json();
+        if (!cr.ok) {
+          document.getElementById('submitting-section').classList.add('d-none');
+          document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+          document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+          return;
+        }
+        _pb.carrierUuid = cd.unique_id;
+        _pb.carrierName = cd.sample_name;
+        _pb.pendingNewCarrier = false;
+        document.getElementById('pb-carrier-name').textContent = cd.sample_name;
+      }
+
+      const res = await fetch('/api/photobox/upload', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          orcid, project_id, instrument_name,
+          file,
+          carrier_uuid: _pb.carrierUuid,
+          tray1_uuid: _pb.tray1Uuid,
+          tray2_uuid: _pb.tray2Uuid,
+          sample_uuids: allTfUuids,
+          sample_positions: samplePositions,
+          kw_list: getKeywords(),
+          comments: document.getElementById('comments').value.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      document.getElementById('submitting-section').classList.add('d-none');
+      if (res.ok) {
+        document.getElementById('upload-modal-title').textContent = 'Upload running';
+        document.getElementById('upload-modal-header').classList.add('bg-success', 'text-white');
+        document.getElementById('success-section').classList.remove('d-none');
+        document.getElementById('prefect-link').href =
+          'http://127.0.0.1:4200/flow-runs/flow-run/' + data.flow_run_id;
+        document.getElementById('crucible-link').href =
+          `https://crucible.lbl.gov/explore/${data.project_id}/#tab=datasets`;
+      } else {
+        document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+        document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+      }
+    } catch (e) {
+      document.getElementById('submitting-section').classList.add('d-none');
+      document.getElementById('upload-modal-title').textContent = 'Upload Failed';
+      document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+    } finally {
+      btn.disabled = false;
+    }
+  };
+})();
+</script>

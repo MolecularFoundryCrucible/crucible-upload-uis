@@ -16,7 +16,9 @@ PANEL_TEMPLATE = 'instruments/nirvana/panel.html'
 
 
 def _parse_nirvana_h5(path: str) -> list[dict]:
-    """Extract sample names and UUIDs from a Nirvana ScopeFoundry h5 file."""
+    """Extract sample names and UUIDs from a Nirvana ScopeFoundry h5 file.
+    Supports both _line_scan (positions at measurement level) and
+    _spec_run (positions nested under dtype groups like pl, uvvis)."""
     def decode(v):
         return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
 
@@ -26,9 +28,21 @@ def _parse_nirvana_h5(path: str) -> list[dict]:
         if meas_grp is None:
             raise ValueError("No /measurement group found in this file")
         meas_name = next(iter(meas_grp.keys()))
-        positions = meas_grp[meas_name].get('positions')
-        if positions is None:
-            raise ValueError(f"No positions group found under /measurement/{meas_name}")
+        meas = meas_grp[meas_name]
+
+        if meas_name.endswith('_spec_run'):
+            dtype_key = next(
+                (k for k in meas.keys() if k != 'settings' and 'positions' in meas[k]),
+                None,
+            )
+            if dtype_key is None:
+                raise ValueError(f"No positions group found in spec_run measurement '{meas_name}'")
+            positions = meas[dtype_key]['positions']
+        else:
+            positions = meas.get('positions')
+            if positions is None:
+                raise ValueError(f"No positions group found under /measurement/{meas_name}")
+
         for i, pos_name in enumerate(sorted(positions.keys())):
             attrs = positions[pos_name].attrs
             sample_name = decode(attrs['sample_name']) if 'sample_name' in attrs else pos_name

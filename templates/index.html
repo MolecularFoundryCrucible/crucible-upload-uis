@@ -155,7 +155,7 @@
     </div>
 
     <!-- File Selection (full width) -->
-    <div class="card shadow-sm mb-4">
+    <div id="file-section-card" class="card shadow-sm mb-4">
       <div class="card-body">
         <h5 id="session-card-title" class="card-title text-primary mb-3">Session</h5>
         <div class="input-group mb-2">
@@ -211,6 +211,9 @@
       <button id="btn-ma-upload" class="btn btn-success btn-lg px-5 d-none" onclick="confirmAssignmentUpload()">
         <span id="spinner-ma-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Confirm &amp; Upload
+      </button>
+      <button id="btn-pb-upload" class="btn btn-success btn-lg px-5 d-none" onclick="pbUpload()">
+        Upload
       </button>
       <button id="btn-upload" class="btn btn-primary btn-lg px-5" onclick="doUpload()">
         <span id="spinner-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
@@ -1064,15 +1067,17 @@
         : state.globalIsSession;
       applyUploadModeUI();
       const isMultiAssignment = state.uiModes[instrument] === 'multi_assignment';
+      const isPhotobox = state.uiModes[instrument] === 'photobox';
 
       // Hide all per-instrument panels
       document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
 
-      document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment);
-      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment);
+      document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment || isPhotobox);
+      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
+      document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
 
-      if (!isMultiAssignment) {
+      if (!isMultiAssignment && !isPhotobox) {
         _clearNirvanaUI();
         return;
       }
@@ -1080,6 +1085,8 @@
       // Show this instrument's panel
       const panel = document.getElementById(`panel-${instrument}`);
       if (panel) panel.classList.remove('d-none');
+
+      if (isPhotobox) return;
 
       // Init active holder layout for this instrument
       if (!state.activeHolderLayout[instrument]) {

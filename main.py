@@ -587,6 +587,100 @@ def resolve_holders():
     return jsonify({"files": files})
 
 
+def _next_carrier_name(project_id: str) -> str:
+    import re
+    existing = backend.client.samples.list(project_id=project_id)
+    nums = [int(m.group(1)) for s in existing
+            if (m := re.match(r'CAR(\d+)$', s.get("sample_name", "")))]
+    return f"CAR{((max(nums) + 1) if nums else 1):06d}"
+
+
+@app.get("/api/photobox/next_carrier_name")
+def photobox_next_carrier_name():
+    project_id = (request.args.get("project_id") or "").strip()
+    if not project_id:
+        return jsonify({"error": "project_id required"}), 400
+    try:
+        return jsonify({"sample_name": _next_carrier_name(project_id)})
+    except Exception as e:
+        backend.logger.error(f"next_carrier_name failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/photobox/create_carrier")
+def photobox_create_carrier():
+    data = request.json or {}
+    project_id = (data.get("project_id") or "").strip()
+    orcid = (data.get("orcid") or "").strip()
+    name = (data.get("sample_name") or "").strip()
+    description = (data.get("description") or "").strip() or None
+    if not project_id or not orcid:
+        return jsonify({"error": "project_id and orcid required"}), 400
+    try:
+        if not name:
+            name = _next_carrier_name(project_id)
+        result = backend.create_sample(
+            sample_name=name,
+            owner_orcid=orcid,
+            project_id=project_id,
+            sample_type="thin film carrier",
+            description=description,
+        )
+        return jsonify(result)
+    except Exception as e:
+        backend.logger.error(f"create_carrier failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.post("/api/photobox/upload")
+def photobox_upload_endpoint():
+    from prefect.deployments import run_deployment
+    data = request.json or {}
+    orcid = (data.get("orcid") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    instrument_name = (data.get("instrument_name") or "spinbot_photobox").strip()
+    photo_file = (data.get("file") or "").strip()
+    carrier_uuid = (data.get("carrier_uuid") or "").strip()
+    tray1_uuid = (data.get("tray1_uuid") or "").strip()
+    tray2_uuid = (data.get("tray2_uuid") or "").strip()
+    sample_uuids = data.get("sample_uuids") or []
+    sample_positions = data.get("sample_positions") or {}
+    kw_list = data.get("kw_list") or []
+    comments = data.get("comments") or None
+
+    if not orcid or not project_id:
+        return jsonify({"error": "orcid and project_id required"}), 400
+    if not photo_file:
+        return jsonify({"error": "file required"}), 400
+    if not carrier_uuid:
+        return jsonify({"error": "carrier_uuid required"}), 400
+    if not os.path.isfile(photo_file):
+        return jsonify({"error": f"File not found: {photo_file}"}), 400
+
+    try:
+        flow_run = run_deployment(
+            "photobox-upload/photobox-upload",
+            parameters={
+                "file": photo_file,
+                "carrier_uuid": carrier_uuid,
+                "tray1_uuid": tray1_uuid,
+                "tray2_uuid": tray2_uuid,
+                "sample_uuids": sample_uuids,
+                "sample_positions": sample_positions,
+                "project_id": project_id,
+                "orcid": orcid,
+                "instrument_name": instrument_name,
+                "kw_list": kw_list,
+                "comments": comments,
+            },
+            timeout=0,
+        )
+        return jsonify({"flow_run_id": str(flow_run.id), "project_id": project_id})
+    except Exception as e:
+        backend.logger.error(f"photobox upload failed: {repr(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.post("/api/multi_assignment/upload")
 def multi_assignment_upload():
     from prefect.deployments import run_deployment
@@ -658,7 +752,7 @@ def multi_assignment_upload():
                     continue
                 sample_uuids = item.get("sample_uuids") or []
                 link_samples = bool(item.get("link_samples", False))
-                dsid, _ = backend.resolve_dsid_for_file(file_path, valid_dsids)
+                dsid = backend.read_h5_dsid(file_path) or backend.resolve_dsid_for_file(file_path, valid_dsids)[0]
                 flow_run = run_deployment(
                     "multi-assignment-upload/multi-assignment-upload",
                     parameters={"file": file_path, "sample_uuids": sample_uuids,

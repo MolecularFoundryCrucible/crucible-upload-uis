@@ -75,20 +75,5 @@ The shortcut points to `CrucibleUploader.vbs`, which starts the full app (Prefec
 
 If you prefer to see server logs while the app runs, point the shortcut at `launch.bat` instead (right-click shortcut → Properties → change Target path to `launch.bat`).
 
-### Additional Details (potentially outdated)
-- instrument_conf.py allows configuration of instrument specific details that may be helpful:
-    - `DEFAULT_BROWSE_DIR` will set the default directory for the file/folder picker.
-    - `IS_SESSION` controls the upload mode (applies to the whole app):
-        - `True` — the picker selects a **folder**. A `parent dataset` is created for the session and one child dataset is created per qualifying file within the directory, each linked to the parent.
-        - `False` — the picker selects **one or more files** (cmd/ctrl/shift-click to multi-select). Each file becomes its own standalone dataset; no parent session is created.
-    - `INSTRUMENTS` is a list of the instruments that will appear as choices in a dropdown in the UI.
-    - `DEFAULT_INSTRUMENT_NAME` will be the pre-selected instrument value.
-    - `INSTRUMENT_FLOWS` maps a session-mode instrument to the Prefect deployment used to upload its sessions (format `flow-name/deployment-name`). Only consulted when `IS_SESSION = True`; file-mode uploads always use the generic `upload-dataset` / `multi-file-upload` deployments.
-    - `POST_PROCESSING_REQUESTS` maps an instrument name to a list of post-processing requests to run on each dataset after its files land (e.g. `{"insitu_pl": ["insitu_aggregation"]}`). Each name maps to the corresponding `client.datasets.request_<name>` call; instruments not listed get no post-processing.
-    - `CHAIN_POST_PROCESSING` controls how an instrument's post-processing requests run: `True` runs them sequentially, where each depends on the previous succeeding (a failure halts the rest); `False` requests them all in parallel.
-    - `ACCEPTABLE_FILE_TYPES` is the set of file extensions eligible for upload in session mode.
-    - `PRINT_BARCODE_ENABLED` can be set to True or False. If True a button will display in the UI to allow the user to print the barcode for the sample. Barcode formatting and printer settings are currently not configurable. The app will expect a Brother pt-d610bt label printer to be connected to the printer with 0.94" tape. This setup is also currently limited to windows os. 
-- To prevent accidental uploads of system-level directories, the selected folder must be at least 3 levels deep from the filesystem root (e.g. D:\Users\data\session). 
-
 
 

@@ -2,6 +2,7 @@
 Backend functions for the Crucible upload UI.
 Replace these stubs with your real implementations.
 """
+import json
 import os
 import re
 import tempfile
@@ -155,12 +156,12 @@ def create_sample(sample_name: str,
 
 
 def print_sample_barcode(sample_unique_id, sample_name):
-    from image_print import make_qr, make_nirvana_image, print_label
+    from image_print import make_qr, make_image, print_label
     # qr code
     qr_img = make_qr(sample_unique_id)
 
     # label image
-    make_nirvana_image(qr_img, [sample_name, sample_unique_id[0:13]], "batch.png")
+    make_image(qr_img, [sample_name, sample_unique_id[0:13]], "batch.png")
     print_label("Brother PT-D610BT", "batch.png")
     return
 
@@ -174,8 +175,6 @@ def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
     if len(parts) - 1 < min_depth:  # subtract 1 to not count the root
         raise ValueError(f"Session folder is too close to the filesystem root. Please select a folder at least {min_depth} levels deep.")
-    else:
-        return
 
 def check_existing_sessions(session_folder_path: str, orcid: str, project_id: str,
                             instrument_name: str) -> list[dict]:
@@ -319,16 +318,20 @@ def create_dataset(files: list[str],
                    orcid: str | None = None,
                    session_name: str | None = None,
                    dsid: str | None = None,
-                   kw_list: list[str] = [],
+                   kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None,
-                   excluded_uuids: list[str] = [],
+                   excluded_uuids: list[str] | None = None,
                    position: str | None = None,
                    mark_as_parent: bool = False,
                    dataset_name: str | None = None,
                    measurement: str | None = None,
-                   sample_positions: dict | None = None) -> str:
+                   data_type: str | None = None,
+                   sample_positions: dict | None = None,
+                   scientific_metadata: dict | None = None,
+                   wait_for_ingestion: bool = True) -> str:
     logger = get_run_logger()
+    kw_list = kw_list or []
 
     ds_kwargs = {k: v for k, v in dict(
         unique_id=dsid,
@@ -338,9 +341,12 @@ def create_dataset(files: list[str],
         session_name=session_name,
         dataset_name=dataset_name,
         measurement=measurement,
+        data_type=data_type,
     ).items() if v is not None}
     ds = BaseDataset(**ds_kwargs)
-    scimd = {'comments': comments} if comments else {}
+    scimd = dict(scientific_metadata or {})
+    if comments:
+        scimd['comments'] = comments
     if excluded_uuids:
         scimd['skipped thin films'] = excluded_uuids
     if position:
@@ -356,7 +362,7 @@ def create_dataset(files: list[str],
             keywords=kw_list,
             files_to_upload=files,
             ingestor=ingestor or None,
-            wait_for_ingestion_response=True,
+            wait_for_ingestion_response=wait_for_ingestion,
         )
     except Exception:
         if dsid:
@@ -390,32 +396,309 @@ def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] 
         client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
     return len(uuids)
 
-def run_dry_ingest(file: str, ingestor_name: str) -> dict:
-    """Parse a file with crucible-ingest (no --push) and return the packet dict."""
-    import json, tempfile, os
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cmd = ["crucible-ingest", "--file", file, "--dsid", "xxx", "--output-dir", tmpdir]
-        if ingestor_name:
-            cmd += ["--ingestor", ingestor_name]
-        result = sp.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Dry run failed:\n{result.stderr or result.stdout}")
-        packet_path = os.path.join(tmpdir, "packet.json")
-        if not os.path.exists(packet_path):
-            raise RuntimeError("crucible-ingest produced no packet.json")
-        with open(packet_path) as f:
-            return json.load(f)
-
-
 def list_ingestors() -> list[str]:
-    raw = client.ingestions.list_ingestors() or []
-    result = []
-    for item in raw:
-        for name in str(item).split(','):
-            name = name.strip()
-            if name:
-                result.append(name)
-    return result
+    # Sourced locally rather than from client.ingestions.list_ingestors(): the server list
+    # disagrees with the installed registry on some names, and find_supported_ingestor
+    # silently falls back to auto-detection for names it doesn't recognise, so a user can
+    # believe they forced an ingestor when they did not.
+    from crucible_ingestion.ingestors.registry import SELECTABLE
+    return sorted(SELECTABLE)
+
+
+# ── Local-parse preview ──────────────────────────────────────────────────────
+# Parse files client-side so the operator can review and correct scientific metadata
+# before anything is pushed. The packet lives on disk between the preview and the
+# upload; the browser only ever sees a thumbnail-stripped view of it.
+
+_PREVIEW_DIR = Path(tempfile.gettempdir()) / 'crucible_preview_packets'
+_DSID_RE = re.compile(r'^[0-9a-z]{26}$')
+_PREVIEW_MAX_AGE_S = 24 * 3600
+_SCALAR_TYPES = {'string', 'number', 'integer', 'boolean'}
+
+
+def preview_packet_path(dsid: str) -> Path:
+    # The dsid arrives from the browser and becomes a filename, so it is a path traversal
+    # sink. The pattern check rejects anything that isn't an mfid; resolving and asserting
+    # containment keeps that safe if the pattern is ever loosened.
+    if not _DSID_RE.match(dsid or ''):
+        raise ValueError(f'malformed dsid: {dsid!r}')
+    _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    path = (_PREVIEW_DIR / f'{dsid}.json').resolve()
+    if path.parent != _PREVIEW_DIR.resolve():
+        raise ValueError('dsid escaped the preview directory')
+    return path
+
+
+def load_preview_packet(dsid: str):
+    from crucible_ingestion.packet import IngestionPacket
+    with open(preview_packet_path(dsid)) as f:
+        return IngestionPacket(**json.load(f))
+
+
+def delete_preview_packet(dsid: str) -> None:
+    preview_packet_path(dsid).unlink(missing_ok=True)
+
+
+def purge_stale_previews(max_age_s: int = _PREVIEW_MAX_AGE_S) -> int:
+    """Drop packets left behind by abandoned previews. Called at startup."""
+    import time
+    if not _PREVIEW_DIR.is_dir():
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for p in _PREVIEW_DIR.glob('*.json'):
+        if p.stat().st_mtime < cutoff:
+            p.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
+def _is_empty(value) -> bool:
+    return value is None or value == '' or value == [] or value == {}
+
+
+def _fill_gaps(base: dict, incoming: dict, collisions: list, path: str = '') -> dict:
+    for key, value in incoming.items():
+        here = f'{path}.{key}' if path else key
+        if key not in base or _is_empty(base[key]):
+            base[key] = value
+        elif isinstance(base[key], dict) and isinstance(value, dict):
+            _fill_gaps(base[key], value, collisions, here)
+        elif not _is_empty(value) and base[key] != value:
+            collisions.append({'field': here, 'kept': base[key], 'discarded': value})
+    return base
+
+
+def _dedup(items: list) -> list:
+    seen, out = set(), []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _dedup_by(items: list, key) -> list:
+    seen, out = set(), []
+    for item in items:
+        k = key(item)
+        if k is None:
+            out.append(item)
+        elif k not in seen:
+            seen.add(k)
+            out.append(item)
+    return out
+
+
+def fold_into_packet(packet, parsed, collisions: list, source: str = ''):
+    """Update the running packet with everything the next file contributed. Values
+    already extracted are kept; a differing value that gets dropped is reported."""
+    found: list[dict] = []
+    _fill_gaps(packet.scientific_metadata, parsed.scientific_metadata, found)
+    _fill_gaps(packet.dataset_fields, parsed.dataset_fields, found)
+    for c in found:
+        c['file'] = source
+    collisions.extend(found)
+    packet.keywords = _dedup(list(packet.keywords) + list(parsed.keywords))
+    packet.samples = _dedup_by(list(packet.samples) + list(parsed.samples),
+                               lambda s: s.get('unique_id'))
+    packet.children = _dedup_by(list(packet.children) + list(parsed.children),
+                                lambda c: (c.get('dataset') or {}).get('unique_id'))
+    packet.thumbnails = list(packet.thumbnails) + list(parsed.thumbnails)
+    return packet
+
+
+def ingestion_githash() -> str | None:
+    """Resolve the commit the ingestion library was installed from, the same way the
+    server-side consumer does, so a locally parsed record is traceable to exact code."""
+    from importlib.metadata import distribution
+    try:
+        direct_url = distribution('crucible-ingestion').read_text('direct_url.json')
+        return json.loads(direct_url)['vcs_info']['commit_id']
+    except Exception as err:
+        logger.warning(f'Could not resolve crucible-ingestion githash: {err}')
+        return None
+
+
+def parse_for_preview(files: list[str], dsid: str,
+                      ingestor_name: str = '') -> tuple[object, list[dict], list[dict], list[str]]:
+    """Parse each file into one running packet, so by the last file the maximal amount of
+    metadata has been extracted. Nothing is pushed until the operator approves.
+
+    Files no ingestor claims are skipped and named in the fourth return value; they are
+    still uploaded, just with nothing extracted from them. If that is every file the packet
+    comes back empty and the operator fills the form in by hand.
+
+    The third return value records which ingestor actually handled each file. A named
+    ingestor that does not support a file is silently swapped for an auto-detected one,
+    so this is the only place that distinction is observable."""
+    from crucible_ingestion.data_ingestion import parse
+    from crucible_ingestion.packet import IngestionPacket
+    packet = None
+    collisions: list[dict] = []
+    per_file: list[dict] = []
+    skipped: list[str] = []
+    for path in files:
+        name = os.path.basename(path)
+        parsed = parse(path, dsid, ingestor_name or None)
+        if parsed is None:
+            logger.warning(f'No ingestor supports {name}; skipping')
+            skipped.append(name)
+            continue
+        per_file.append({'file': name, 'ingestion_class': parsed.ingestion_class})
+        if packet is None:
+            packet = parsed
+        else:
+            fold_into_packet(packet, parsed, collisions, name)
+    if packet is None:
+        packet = IngestionPacket(unique_id=dsid, ingestion_class='')
+    return packet, collisions, per_file, skipped
+
+
+def _value_at(data: dict, path: list[str]):
+    cur = data
+    for part in path:
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+# size is measured from the file and parse_provenance is a record of what the machine did,
+# so an operator's value for either would only ever be wrong.
+LOCKED_FIELDS = {'size', 'parse_provenance'}
+
+
+def _resolve_ref(spec: dict, root: dict) -> dict:
+    """Follow local $ref pointers so a referenced subschema is walked like an inline one.
+    Remote and cyclic refs are left unresolved."""
+    seen: set[str] = set()
+    while isinstance(spec, dict) and '$ref' in spec:
+        ref = spec['$ref']
+        if not isinstance(ref, str) or not ref.startswith('#/') or ref in seen:
+            return spec
+        seen.add(ref)
+        target = root
+        for part in ref[2:].split('/'):
+            part = part.replace('~1', '/').replace('~0', '~')
+            if not isinstance(target, dict) or part not in target:
+                return spec
+            target = target[part]
+        if not isinstance(target, dict):
+            return spec
+        spec = {**target, **{k: v for k, v in spec.items() if k != '$ref'}}
+    return spec
+
+
+def build_form_descriptor(schema: dict, scientific_metadata: dict) -> list[dict]:
+    """Flatten a JSON Schema into form fields, each prefilled from the parsed metadata.
+    Scalars, enums and arrays of scalars are editable; arrays of objects are shown
+    read-only."""
+    fields: list[dict] = []
+    root = schema or {}
+
+    def walk(node: dict, path: list[str], group_labels: list[str]):
+        props = node.get('properties') or {}
+        for name, spec in props.items():
+            spec = _resolve_ref(spec or {}, root)
+            here = path + [name]
+            stype = spec.get('type')
+            if stype == 'object' or 'properties' in spec:
+                walk(spec, here, group_labels + [spec.get('title') or name])
+                continue
+            enum = spec.get('enum')
+            items_type = (spec.get('items') or {}).get('type') if stype == 'array' else None
+            value = _value_at(scientific_metadata, here)
+            locked = here[0] in LOCKED_FIELDS
+            fields.append({
+                'path': here,
+                'key': '.'.join(here),
+                'label': spec.get('title') or name,
+                'group_labels': group_labels,
+                'description': spec.get('description') or '',
+                'type': stype or ('string' if enum else 'unknown'),
+                'items_type': items_type,
+                'enum': enum,
+                'value': value,
+                'editable': not locked and (bool(enum) or stype in _SCALAR_TYPES
+                                            or items_type in _SCALAR_TYPES),
+            })
+
+    walk(_resolve_ref(root, root), [], [])
+    return fields
+
+
+def unmapped_metadata(fields: list[dict], scientific_metadata: dict) -> dict:
+    covered = {f['path'][0] for f in fields}
+    return {k: v for k, v in (scientific_metadata or {}).items() if k not in covered}
+
+
+DATASET_FORM_FIELDS = [
+    {'key': 'dataset_name', 'label': 'Dataset name',
+     'description': 'Human-readable name for this dataset.'},
+    {'key': 'measurement', 'label': 'Measurement',
+     'description': 'What was measured, e.g. "cyclic voltammetry".'},
+    {'key': 'data_type', 'label': 'Data type',
+     'description': 'Kind of data produced, e.g. "spectrum", "image".'},
+    {'key': 'session_name', 'label': 'Session',
+     'description': 'Session this dataset belongs to.'},
+]
+DATASET_FORM_KEYS = {f['key'] for f in DATASET_FORM_FIELDS}
+
+
+def build_dataset_form_descriptor(dataset_fields: dict) -> list[dict]:
+    """The editable dataset columns, shaped like build_form_descriptor's output so the
+    browser can render both with the same code."""
+    values = dataset_fields or {}
+    return [{
+        'path': [spec['key']],
+        'key': spec['key'],
+        'label': spec['label'],
+        'description': spec['description'],
+        'type': 'string',
+        'items_type': None,
+        'enum': None,
+        'value': values.get(spec['key']),
+        'editable': True,
+    } for spec in DATASET_FORM_FIELDS]
+
+
+def other_dataset_fields(dataset_fields: dict) -> dict:
+    """Dataset columns the form does not offer, shown read-only for context."""
+    return {k: v for k, v in (dataset_fields or {}).items() if k not in DATASET_FORM_KEYS}
+
+
+def apply_dataset_field_edits(packet, edits: dict):
+    """Write operator corrections onto the packet's dataset columns. Keys outside
+    DATASET_FORM_FIELDS are dropped: this dict comes straight from the browser."""
+    for key, value in (edits or {}).items():
+        if key in DATASET_FORM_KEYS:
+            packet.dataset_fields[key] = value
+    return packet
+
+
+def apply_metadata_edits(packet, edits: dict):
+    """Write edited values back to their dotted paths. Scientific metadata is the only
+    part of a packet the operator may change."""
+    for key, value in (edits or {}).items():
+        parts = [p for p in str(key).split('.') if p]
+        if not parts or parts[0] in LOCKED_FIELDS:
+            continue
+        cur = packet.scientific_metadata
+        for part in parts[:-1]:
+            if not isinstance(cur.get(part), dict):
+                cur[part] = {}
+            cur = cur[part]
+        cur[parts[-1]] = value
+    return packet
+
+
+def preview_view(packet) -> dict:
+    """Packet as sent to the browser. Thumbnails are large and never editable, so only
+    their count crosses the wire."""
+    view = packet.to_dict()
+    view['thumbnail_count'] = len(view.pop('thumbnails', None) or [])
+    return view
 
 
 def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str = '') -> list[dict]:
@@ -454,6 +737,19 @@ def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str =
 def request_post_processing(name: str, new_ds_dsid: str):
     # name maps to client.datasets.request_<name>, e.g. "insitu_aggregation".
     return getattr(client.datasets, f"request_{name}")(new_ds_dsid)
+
+
+def _run_post_processing(instrument_name: str, dsid: str):
+    """Dispatch the instrument's configured post-processing requests for a dataset.
+    CHAIN_POST_PROCESSING runs them inline so they finish before the flow ends."""
+    from instruments.registry import POST_PROCESSING_REQUESTS
+    from instrument_conf import CHAIN_POST_PROCESSING
+
+    for name in POST_PROCESSING_REQUESTS.get(instrument_name, []):
+        if CHAIN_POST_PROCESSING:
+            request_post_processing(name, dsid)
+        else:
+            request_post_processing.submit(name, dsid)
 
 
 def _split_h5_position(source_path: str, position_label: str, output_dir: str) -> str:
@@ -528,12 +824,9 @@ def upload_dataset(files: list,
                    session_dsid: str | None = None,
                    dsid: str | None = None,
                    sample_unique_id: str | None = None,
-                   kw_list: list[str] = [],
+                   kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
-
     new_ds_dsid = create_dataset(files=files,
                                  instrument_name=instrument_name,
                                  project_id=project_id,
@@ -547,15 +840,7 @@ def upload_dataset(files: list,
     link_dataset_to_session(new_ds_dsid, session_dsid)
     link_dataset_and_sample(new_ds_dsid, sample_unique_id)
 
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
-    if CHAIN_POST_PROCESSING:
-        # Sequential — each blocks on the previous; a failure halts the rest.
-        for name in requests:
-            request_post_processing(name, new_ds_dsid)
-    else:
-        # Independent — fire all at once.
-        for name in requests:
-            request_post_processing.submit(name, new_ds_dsid)
+    _run_post_processing(instrument_name, new_ds_dsid)
 
     return new_ds_dsid
 
@@ -563,13 +848,14 @@ def upload_dataset(files: list,
 @flow(flow_run_name=_run_name("session"))
 def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                        sample_unique_id: str | None = None, session_dsid: str | None = None,
-                       kw_list: list[str] = [], comments: str | None = None,
+                       kw_list: list[str] | None = None, comments: str | None = None,
                        ingestor: str | None = None) -> str:
     import time
     import os
     import requests as req
     from prefect.deployments import run_deployment
     logger = get_run_logger()
+    kw_list = kw_list or []
 
     session_folder_path = file
 
@@ -625,13 +911,15 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
     pending = {str(r.id) for r in child_runs}
     failed = []
 
+    api_url = os.environ.get("PREFECT_API_URL", "http://127.0.0.1:4200/api")
+    session = req.Session()
+
     while pending:
         time.sleep(5)
         still_pending = set()
         for rid in pending:
-            api_url = os.environ.get("PREFECT_API_URL", "http://127.0.0.1:4200/api")
             try:
-                resp = req.get(f"{api_url}/flow_runs/{rid}", timeout=10)
+                resp = session.get(f"{api_url}/flow_runs/{rid}", timeout=10)
                 resp.raise_for_status()
                 state = resp.json().get("state", {}).get("type", "")
             except Exception as e:
@@ -661,12 +949,13 @@ def multi_file_upload(files: list[str],
                       project_id: str,
                       orcid: str,
                       sample_unique_id: str | None = None,
-                      kw_list: list[str] = [],
+                      kw_list: list[str] | None = None,
                       comments: str | None = None,
                       ingestor: str | None = None) -> list[str]:
     import time
     from prefect.deployments import run_deployment
     logger = get_run_logger()
+    kw_list = kw_list or []
 
     valid_dsids = existing_dsids(orcid, project_id)
     logger.info(f"Found {len(valid_dsids)} existing datasets for user+project")
@@ -706,13 +995,11 @@ def multi_assignment_upload(file: str,
                    orcid: str,
                    instrument_name: str = "",
                    dsid: str | None = None,
-                   kw_list: list[str] = [],
+                   kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None,
-                   excluded_uuids: list[str] = [],
+                   excluded_uuids: list[str] | None = None,
                    link_samples: bool = False) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
 
     new_dsid = create_dataset(files=[file],
@@ -728,13 +1015,7 @@ def multi_assignment_upload(file: str,
         link_dataset_and_sample(new_dsid, sample_uuids)
         logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
 
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
-    if CHAIN_POST_PROCESSING:
-        for name in requests:
-            request_post_processing(name, new_dsid)
-    else:
-        for name in requests:
-            request_post_processing.submit(name, new_dsid)
+    _run_post_processing(instrument_name, new_dsid)
 
     return new_dsid
 
@@ -745,26 +1026,18 @@ def flat_multi_upload(file: str,
                       project_id: str,
                       orcid: str,
                       instrument_name: str = "",
-                      kw_list: list[str] = [],
+                      kw_list: list[str] | None = None,
                       comments: str | None = None,
                       ingestor: str | None = None) -> list[str]:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
     dsids = []
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
     for uuid in sample_uuids:
         dsid = create_dataset(files=[file], instrument_name=instrument_name,
                               project_id=project_id, orcid=orcid,
                               kw_list=kw_list, comments=comments, ingestor=ingestor)
         link_dataset_and_sample(dsid, uuid)
         logger.info(f"Created dataset {dsid} linked to sample {uuid}")
-        if CHAIN_POST_PROCESSING:
-            for name in requests:
-                request_post_processing(name, dsid)
-        else:
-            for name in requests:
-                request_post_processing.submit(name, dsid)
+        _run_post_processing(instrument_name, dsid)
         dsids.append(dsid)
     return dsids
 
@@ -781,8 +1054,6 @@ def photobox_upload(file: str,
                     kw_list: list[str] | None = None,
                     comments: str | None = None,
                     sample_positions: dict | None = None) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
     logger = get_run_logger()
 
     for tray_uuid in [tray1_uuid, tray2_uuid]:
@@ -804,13 +1075,7 @@ def photobox_upload(file: str,
     link_dataset_and_sample(new_dsid, all_uuids)
     logger.info(f"Linked dataset {new_dsid} to carrier + {len(sample_uuids)} thin films")
 
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
-    if CHAIN_POST_PROCESSING:
-        for name in requests:
-            request_post_processing(name, new_dsid)
-    else:
-        for name in requests:
-            request_post_processing.submit(name, new_dsid)
+    _run_post_processing(instrument_name, new_dsid)
 
     return new_dsid
 
@@ -822,14 +1087,13 @@ def parent_child_upload(file: str,
                         project_id: str,
                         orcid: str,
                         instrument_name: str = "",
-                        kw_list: list[str] = [],
+                        kw_list: list[str] | None = None,
                         comments: str | None = None,
                         ingestor: str | None = None,
-                        child_positions: list[str] = []) -> str:
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
+                        child_positions: list[str] | None = None) -> str:
     logger = get_run_logger()
-    requests = POST_PROCESSING_REQUESTS.get(instrument_name, [])
+    kw_list = kw_list or []
+    child_positions = child_positions or []
 
     parent_dsid = create_dataset(files=[file], instrument_name=instrument_name,
                                  project_id=project_id, orcid=orcid,
@@ -852,11 +1116,58 @@ def parent_child_upload(file: str,
             link_dataset_and_sample(child_dsid, child_uuid)
             link_dataset_to_session(child_dsid, parent_dsid)
             logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}, position={position}")
-            if CHAIN_POST_PROCESSING:
-                for name in requests:
-                    request_post_processing(name, child_dsid)
-            else:
-                for name in requests:
-                    request_post_processing.submit(name, child_dsid)
+            _run_post_processing(instrument_name, child_dsid)
 
     return parent_dsid
+
+
+# Upload path for datasets the operator previewed and corrected locally. Preview wrote
+# nothing to Crucible, so this is where the record first appears — the only thing that
+# already exists is the reviewed packet on disk.
+#
+# datasets.create() creates the record, PATCH-merges the scientific metadata, and only
+# then calls add_file() per file. add_file() requests server-side ingestion, so the
+# ingestors run again on the server. That redundancy is deliberate: it records the
+# ingestion code git hash and ingestor class on each ingestion request, and the re-parse
+# merges beneath the operator's values rather than over them. The jobs are left to run
+# concurrently: files of one dataset do not parse overlapping fields, so they have nothing
+# to race over.
+@flow(flow_run_name=_run_name("preview-upload"))
+def preview_upload(files: list[str],
+                   dsid: str,
+                   instrument_name: str | None = None,
+                   project_id: str | None = None,
+                   orcid: str | None = None,
+                   sample_unique_id: str | list[str] | None = None,
+                   session_dsid: str | None = None,
+                   ingestor: str | None = None,
+                   comments: str | None = None) -> str:
+    logger = get_run_logger()
+    packet = load_preview_packet(dsid)
+
+    ds_fields = packet.dataset_fields or {}
+    named = {k: (ds_fields.get(k) or None) for k in DATASET_FORM_KEYS}
+
+    create_dataset(
+        files=files,
+        instrument_name=instrument_name,
+        project_id=project_id,
+        orcid=orcid,
+        dsid=dsid,
+        kw_list=list(packet.keywords or []),
+        comments=comments,
+        ingestor=ingestor or packet.ingestion_class,
+        scientific_metadata=packet.scientific_metadata,
+        dataset_name=named['dataset_name'],
+        measurement=named['measurement'],
+        data_type=named['data_type'],
+        session_name=named['session_name'],
+        wait_for_ingestion=False,
+    )
+
+    link_dataset_and_sample(dsid, sample_unique_id)
+    link_dataset_to_session(dsid, session_dsid)
+    delete_preview_packet(dsid)
+    _run_post_processing(instrument_name, dsid)
+    logger.info(f"Preview upload complete for {dsid}")
+    return dsid

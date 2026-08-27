@@ -6,20 +6,88 @@
   <title>Crucible Upload</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <style>
-    body { background: #f5f7fa; }
-    .card { border-top: 4px solid #0d6efd; }
+    :root {
+      --cru-accent: #2f6f9f;
+      --cru-ink: #1f2933;
+      --cru-muted: #64748b;
+      --cru-line: #dde4ec;
+      --cru-surface: #ffffff;
+      --cru-surface-alt: #f4f7fa;
+    }
+    body { background: #eef2f6; color: var(--cru-ink); }
+    .card { border-top: 4px solid var(--cru-accent); }
     .readonly-field {
-      background: #e9ecef;
-      border: 1px solid #ced4da;
+      background: var(--cru-surface-alt);
+      border: 1px solid var(--cru-line);
       border-radius: 0.375rem;
       padding: 0.375rem 0.75rem;
       min-height: 2.25rem;
-      color: #495057;
+      color: var(--cru-muted);
       font-size: 0.95rem;
     }
     .spinner-border-sm { width: 1rem; height: 1rem; }
     #status-box { min-height: 2.5rem; }
     #project { text-overflow: ellipsis; }
+
+    /* Preview & correct form */
+    #preview-modal .modal-header {
+      background: var(--cru-surface-alt);
+      border-bottom: 1px solid var(--cru-line);
+    }
+    #preview-modal .modal-title { color: var(--cru-accent); font-weight: 600; }
+    #preview-modal .modal-footer {
+      background: var(--cru-surface-alt);
+      border-top: 1px solid var(--cru-line);
+    }
+    .form-section {
+      background: var(--cru-surface);
+      border: 1px solid var(--cru-line);
+      border-radius: 0.5rem;
+      padding: 1rem 1.1rem 0.75rem;
+    }
+    .form-section-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--cru-accent);
+      margin-bottom: 0.15rem;
+    }
+    .form-section-hint {
+      font-size: 0.8rem;
+      color: var(--cru-muted);
+      margin-bottom: 0.85rem;
+    }
+    .field-row {
+      padding: 0.4rem 0.5rem;
+      border-radius: 0.375rem;
+      border-left: 3px solid transparent;
+      margin-bottom: 0.15rem;
+    }
+    .field-row:hover { background: var(--cru-surface-alt); }
+    .field-row .col-form-label { color: var(--cru-ink); font-weight: 500; }
+    .field-row .form-text { color: var(--cru-muted); font-size: 0.75rem; }
+    .field-row input:disabled, .field-row select:disabled {
+      background: var(--cru-surface-alt);
+      color: var(--cru-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem;
+    }
+    .field-row .form-control:focus, .field-row .form-select:focus {
+      border-color: var(--cru-accent);
+      box-shadow: 0 0 0 0.2rem rgba(47, 111, 159, 0.15);
+    }
+    .field-group {
+      margin: 0.35rem 0 0.35rem 0.75rem;
+      padding-left: 0.75rem;
+      border-left: 2px solid var(--cru-border, #dee2e6);
+    }
+    .field-group-title {
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--cru-ink);
+      margin-bottom: 0.25rem;
+    }
   </style>
 </head>
 <body>
@@ -79,9 +147,21 @@
 
             <!-- Ingestor -->
             <label class="form-label fw-semibold">Ingestor</label>
-            <select id="ingestor" class="form-select">
-              <option value="">(server default)</option>
+            <select id="ingestor" class="form-select mb-3">
+              <option value="">(auto-detect)</option>
             </select>
+
+            <!-- Metadata schema (preview mode only) -->
+            <div id="schema-picker" class="d-none">
+              <label class="form-label fw-semibold">Metadata schema</label>
+              <div class="input-group">
+                <input id="schema-path" type="text" class="form-control"
+                       placeholder="Optional JSON Schema" readonly />
+                <button class="btn btn-outline-secondary" type="button" onclick="browseSchema()">Browse</button>
+                <button class="btn btn-outline-secondary" type="button" onclick="clearSchema()">Clear</button>
+              </div>
+              <div class="form-text">Fields it requires are flagged if the parser didn't find them.</div>
+            </div>
 
           </div>
         </div>
@@ -199,21 +279,18 @@
     </div>
 
     <!-- Status + Upload -->
-    <div id="dry-run-ma-warning" class="alert alert-warning py-2 d-none mb-2">
-      Dry run is not available when samples are assigned manually to specific holder positions.
-      Disable dry run in Config or remove those assignments.
-    </div>
     <div class="d-flex align-items-center gap-3 mb-5">
       <div id="status-box" class="flex-grow-1"></div>
-      {% if dry_run %}
-      <span class="badge bg-warning text-dark fs-6 px-3 py-2" title="Dry Run mode: files are parsed but not ingested">DRY RUN</span>
-      {% endif %}
       <button id="btn-ma-upload" class="btn btn-success btn-lg px-5 d-none" onclick="confirmAssignmentUpload()">
         <span id="spinner-ma-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
         Confirm &amp; Upload
       </button>
       <button id="btn-pb-upload" class="btn btn-success btn-lg px-5 d-none" onclick="pbUpload()">
         Upload
+      </button>
+      <button id="btn-preview" class="btn btn-outline-primary btn-lg px-4 d-none" onclick="doPreview()">
+        <span id="spinner-preview" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
+        Preview upload
       </button>
       <button id="btn-upload" class="btn btn-primary btn-lg px-5" onclick="doUpload()">
         <span id="spinner-upload" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
@@ -395,14 +472,6 @@
             <input class="form-check-input" type="checkbox" id="cfg-print-barcode" />
             <label class="form-check-label" for="cfg-print-barcode">Enable barcode printing</label>
           </div>
-          <div class="form-check form-switch mb-2">
-            <input class="form-check-input" type="checkbox" id="cfg-dry-run" />
-            <label class="form-check-label" for="cfg-dry-run">Dry Run</label>
-          </div>
-          <div class="alert alert-warning small mb-2 mt-1">
-            <strong>Dry Run note:</strong> Files are parsed but nothing is uploaded to Crucible. The results show what the ingestor would produce.
-            Parent-child uploads are not affected — they always run as real uploads.
-          </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
             Note: <code>CHAIN_POST_PROCESSING</code> and <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
@@ -421,17 +490,64 @@
     </div>
   </div>
 
-  <!-- Dry Run Results Modal -->
-  <div class="modal fade" id="dry-run-modal" tabindex="-1" data-bs-backdrop="static">
-    <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
+  <!-- How to group multiple files -->
+  <div class="modal fade" id="group-modal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
-        <div class="modal-header bg-warning text-dark">
-          <h5 class="modal-title">Dry Run Results</h5>
+        <div class="modal-header">
+          <h5 class="modal-title">Several files selected</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
-        <div class="modal-body" id="dry-run-modal-body"></div>
+        <div class="modal-body">
+          <p><span id="group-modal-count"></span> files selected. Should they become one dataset or one dataset each?</p>
+          <div class="d-grid gap-2">
+            <button class="btn btn-outline-primary" onclick="chooseGrouping(true)">
+              One dataset
+              <div class="form-text">All the files are attached to a single record.</div>
+            </button>
+            <button class="btn btn-outline-primary" onclick="chooseGrouping(false)">
+              One dataset per file
+              <div class="form-text">Each file becomes its own record.</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preview & Correct Modal -->
+  <div class="modal fade" id="preview-modal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Review extracted metadata</h5>
+          <button type="button" class="btn-close" onclick="cancelPreview()"></button>
+        </div>
+        <div class="modal-body">
+          <div id="preview-progress" class="text-muted small mb-2"></div>
+          <div id="preview-warnings"></div>
+          <div id="preview-cleared-note" class="alert alert-warning py-2 d-none"></div>
+
+          <section class="form-section mb-3">
+            <h6 class="form-section-title">Dataset</h6>
+            <p class="form-section-hint">How this record is labelled in Crucible.</p>
+            <div id="preview-dataset-fields"></div>
+          </section>
+
+          <section class="form-section">
+            <h6 class="form-section-title">Scientific metadata</h6>
+            <p class="form-section-hint">Values read from your files, checked against the schema.</p>
+            <div id="preview-fields"></div>
+          </section>
+
+          <div class="accordion mt-3" id="preview-extra"></div>
+        </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-secondary" onclick="cancelPreview()">Cancel</button>
+          <button type="button" class="btn btn-primary" id="btn-preview-confirm" onclick="confirmPreview()">
+            <span id="spinner-preview-confirm" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
+            Upload
+          </button>
         </div>
       </div>
     </div>
@@ -452,7 +568,7 @@
       defaultHolderLayouts: {},
       activeHolderLayout: {},
       defaultIngestors: {},
-      dryRun: {{ dry_run | lower }},
+      defaultSchemas: {},
     };
 
     // -------------------------------------------------------------------------
@@ -477,6 +593,7 @@
       state.holderLayouts = data.holder_layouts || {};
       state.defaultHolderLayouts = data.default_holder_layouts || {};
       state.defaultIngestors = data.default_ingestors || {};
+      state.defaultSchemas = data.default_schemas || {};
       state.configDefaultIngestor = data.default_ingestor || "";
       state.instrumentSessionModes = data.instrument_session_modes || {};
       state.globalIsSession = !!data.is_session;
@@ -875,6 +992,9 @@
     // -------------------------------------------------------------------------
     let uploadModal = null;
 
+    const PREFECT_RUN_URL = "http://127.0.0.1:4200/flow-runs/flow-run/";
+    const CRUCIBLE_EXPLORE_URL = "https://crucible.lbl.gov/explore";
+
     function resetUploadModal() {
       document.getElementById("upload-modal-title").textContent = "Submitting...";
       document.getElementById("upload-modal-header").className = "modal-header";
@@ -882,6 +1002,32 @@
       document.getElementById("success-section").classList.add("d-none");
       document.getElementById("error-section").classList.add("d-none");
       document.getElementById("qr-code").innerHTML = "";
+    }
+
+    // Links to the dataset page when a dsid is known, otherwise the project's dataset tab.
+    function showUploadSuccess(title, { flow_run_id, project_id, dsid }) {
+      document.getElementById("submitting-section").classList.add("d-none");
+      document.getElementById("upload-modal-title").textContent = title;
+      document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
+      document.getElementById("success-section").classList.remove("d-none");
+      document.getElementById("prefect-link").href = PREFECT_RUN_URL + (flow_run_id || "");
+
+      const linkUrl = dsid
+        ? `${CRUCIBLE_EXPLORE_URL}/${project_id}/datasets/${dsid}`
+        : `${CRUCIBLE_EXPLORE_URL}/${project_id}/#tab=datasets`;
+      document.getElementById("crucible-link").href = linkUrl;
+
+      const qrContainer = document.getElementById("qr-code");
+      qrContainer.innerHTML = "";
+      new QRCode(qrContainer, { text: linkUrl, width: 256, height: 256 });
+    }
+
+    function showUploadError(message) {
+      document.getElementById("submitting-section").classList.add("d-none");
+      document.getElementById("upload-modal-title").textContent = "Upload Failed";
+      document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
+      document.getElementById("error-section").classList.remove("d-none");
+      document.getElementById("error-message").textContent = message || "Unknown error";
     }
 
     let _pendingUploadParams = null;
@@ -904,6 +1050,27 @@
 
       _selectedSessionDsid = dsid;
       if (_pendingUploadParams) startUploadRequest(_pendingUploadParams);
+    }
+
+    // Several files can go into one dataset or one each. Only worth asking when there is
+    // more than one; a single file skips straight through.
+    let _groupChoiceCb = null;
+
+    function askGrouping(onChoice) {
+      if (state.selectedPaths.length < 2) {
+        onChoice(false);
+        return;
+      }
+      _groupChoiceCb = onChoice;
+      document.getElementById("group-modal-count").textContent = state.selectedPaths.length;
+      new bootstrap.Modal(document.getElementById("group-modal")).show();
+    }
+
+    function chooseGrouping(asOne) {
+      bootstrap.Modal.getInstance(document.getElementById("group-modal")).hide();
+      const cb = _groupChoiceCb;
+      _groupChoiceCb = null;
+      if (cb) cb(asOne);
     }
 
     async function doUpload() {
@@ -940,6 +1107,14 @@
         uploadParams.session_folder_path = state.selectedPaths[0];
       } else {
         uploadParams.session_folder_paths = state.selectedPaths;
+        // Session mode already has folder-level grouping semantics, so only ask here.
+        if (state.selectedPaths.length > 1) {
+          askGrouping(asOne => {
+            uploadParams.group_as_one = asOne;
+            startUploadRequest(uploadParams);
+          });
+          return;
+        }
       }
 
       // Session-check only matters for session mode (it's looking up a folder-named parent dataset).
@@ -981,6 +1156,333 @@
       startUploadRequest(uploadParams);
     }
 
+    // ── Preview upload ───────────────────────────────────────────────────────
+    // Files are parsed locally and shown for correction before anything is pushed.
+    // Several files can be previewed as one dataset or one at a time; either way the
+    // queue below drives one modal per resulting dataset.
+    let previewModal = null;
+    let _previewQueue = [];
+    let _previewIndex = 0;
+    let _previewCurrent = null;
+    let _previewParams = null;
+
+    async function browseSchema() {
+      const res = await fetch("/api/browse?mode=schema");
+      const data = await res.json();
+      if (data.paths && data.paths[0]) {
+        document.getElementById("schema-path").value = data.paths[0];
+      }
+    }
+
+    function clearSchema() {
+      document.getElementById("schema-path").value = "";
+    }
+
+    function _previewValidate() {
+      const missing = [];
+      if (!state.orcid) missing.push("email (look up user first)");
+      if (!document.getElementById("project").value) missing.push("project");
+      if (!document.getElementById("instrument").value) missing.push("instrument");
+      if (state.selectedPaths.length === 0) missing.push("file(s)");
+      if (missing.length) {
+        showStatus("Please fill in: " + missing.join(", ") + ".", "danger");
+        return false;
+      }
+      return true;
+    }
+
+    async function doPreview() {
+      if (!_previewValidate()) return;
+      clearStatus();
+
+      _previewParams = {
+        orcid: state.orcid,
+        project_id: document.getElementById("project").value,
+        instrument_name: document.getElementById("instrument").value,
+        ingestor: document.getElementById("ingestor").value || null,
+        schema_path: document.getElementById("schema-path").value || null,
+        sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
+        comments: document.getElementById("comments").value.trim(),
+        keywords: getKeywords(),
+      };
+
+      askGrouping(asOne => {
+        _startPreviewQueue(asOne ? [state.selectedPaths] : state.selectedPaths.map(p => [p]));
+      });
+    }
+
+    async function _startPreviewQueue(groups) {
+      _previewQueue = groups;
+      _previewIndex = 0;
+      await _runPreviewStep();
+    }
+
+    async function _runPreviewStep() {
+      setSpinner("preview", true);
+      document.getElementById("btn-preview").disabled = true;
+      try {
+        const res = await fetch("/api/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ..._previewParams, files: _previewQueue[_previewIndex] }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus("Preview failed: " + (data.error || res.status), "danger");
+          return;
+        }
+        _previewCurrent = data;
+        renderPreview(data);
+        if (!previewModal) {
+          previewModal = new bootstrap.Modal(document.getElementById("preview-modal"));
+        }
+        previewModal.show();
+      } catch (e) {
+        showStatus("Preview failed: " + e.message, "danger");
+      } finally {
+        setSpinner("preview", false);
+        document.getElementById("btn-preview").disabled = false;
+      }
+    }
+
+    const _PF = "pf-", _DF = "df-";
+
+    function _fieldInput(f, prefix) {
+      // Raw key, not CSS.escape: these ids are only ever looked up with getElementById,
+      // which takes a literal id, and dotted paths would not survive selector escaping.
+      const id = `${prefix}${escapeHtml(f.key)}`;
+      const val = f.value === null || f.value === undefined ? "" : f.value;
+      const common = `id="${id}" data-key="${escapeHtml(f.key)}" data-type="${f.type}" data-items="${f.items_type || ""}" class="form-control form-control-sm"`;
+      if (!f.editable) {
+        return `<input ${common} value="${escapeHtml(JSON.stringify(f.value))}" disabled />`;
+      }
+      if (f.enum) {
+        const opts = ['<option value=""></option>'].concat(
+          f.enum.map(o => `<option value="${escapeHtml(o)}" ${o === f.value ? "selected" : ""}>${escapeHtml(o)}</option>`)
+        ).join("");
+        return `<select ${common.replace("form-control form-control-sm", "form-select form-select-sm")}>${opts}</select>`;
+      }
+      if (f.type === "boolean") {
+        return `<select ${common.replace("form-control form-control-sm", "form-select form-select-sm")}>
+          <option value=""></option>
+          <option value="true" ${f.value === true ? "selected" : ""}>true</option>
+          <option value="false" ${f.value === false ? "selected" : ""}>false</option>
+        </select>`;
+      }
+      if (f.type === "array") {
+        const joined = Array.isArray(f.value) ? f.value.join(", ") : "";
+        return `<input ${common} value="${escapeHtml(joined)}" placeholder="comma separated" />`;
+      }
+      const numeric = f.type === "number" || f.type === "integer";
+      return `<input ${common} type="${numeric ? "number" : "text"}" step="any" value="${escapeHtml(val)}" />`;
+    }
+
+    function _fieldRow(f, prefix) {
+      return `
+        <div class="field-row row align-items-center">
+          <label class="col-sm-4 col-form-label col-form-label-sm" for="${prefix}${escapeHtml(f.key)}">
+            ${escapeHtml(f.label)}
+            ${!f.editable ? '<span class="badge text-bg-secondary ms-1">read-only</span>' : ""}
+            <div class="form-text mt-0">${escapeHtml(f.description)}</div>
+          </label>
+          <div class="col-sm-8">${_fieldInput(f, prefix)}</div>
+        </div>`;
+    }
+
+    // Nested schema objects arrive flattened into dotted paths. Re-nest them visually:
+    // a heading per object, its children indented under it.
+    function _renderFieldGroups(fields, prefix) {
+      const out = [];
+      let open = [];
+      for (const f of fields) {
+        const ancestors = (f.path || []).slice(0, -1);
+        const labels = f.group_labels || ancestors;
+        let shared = 0;
+        while (shared < open.length && shared < ancestors.length && open[shared] === ancestors[shared]) shared++;
+        for (let i = open.length; i > shared; i--) out.push("</div>");
+        for (let i = shared; i < ancestors.length; i++) {
+          out.push(`<div class="field-group">
+            <div class="field-group-title">${escapeHtml(labels[i] || ancestors[i])}</div>`);
+        }
+        open = ancestors;
+        out.push(_fieldRow(f, prefix));
+      }
+      for (let i = open.length; i > 0; i--) out.push("</div>");
+      return out.join("");
+    }
+
+    function _allFields() {
+      return [
+        ...(_previewCurrent.dataset_fields || []).map(f => ({ f, id: _DF + f.key })),
+        ...(_previewCurrent.fields || []).map(f => ({ f, id: _PF + f.key })),
+      ];
+    }
+
+    function renderPreview(data) {
+      const total = _previewQueue.length;
+      document.getElementById("preview-progress").textContent =
+        (total > 1 ? `Dataset ${_previewIndex + 1} of ${total} — ` : "") +
+        `${data.files.join(", ")} → ${data.dsid}`;
+
+      const warnings = [];
+      if (data.reused_dataset) {
+        warnings.push(`<div class="alert alert-info py-2">These bytes already exist in <code>${escapeHtml(data.dsid)}</code>; that dataset will be updated rather than a new one created.</div>`);
+      }
+      if (data.skipped && data.skipped.length) {
+        const names = data.skipped.map(f => `<code>${escapeHtml(f)}</code>`).join(", ");
+        warnings.push(!data.actual_ingestor
+          ? `<div class="alert alert-warning py-2">Nothing could be parsed from ${names}. The form below is empty — fill it in by hand. The files still upload.</div>`
+          : `<div class="alert alert-warning py-2">No ingestor supports ${names}, so nothing was extracted from ${data.skipped.length > 1 ? "them" : "it"}. ${data.skipped.length > 1 ? "They" : "It"} will still be uploaded.</div>`);
+      }
+      if (data.actual_ingestor && data.requested_ingestor && data.requested_ingestor !== data.actual_ingestor) {
+        warnings.push(`<div class="alert alert-warning py-2">You selected <code>${escapeHtml(data.requested_ingestor)}</code> but <code>${escapeHtml(data.actual_ingestor)}</code> actually ran.</div>`);
+      }
+      if (data.collisions && data.collisions.length) {
+        const rows = data.collisions.map(c =>
+          `<tr><td><code>${escapeHtml(c.field)}</code></td><td>${escapeHtml(JSON.stringify(c.kept))}</td><td class="text-muted">${escapeHtml(JSON.stringify(c.discarded))}</td><td>${escapeHtml(c.file || "")}</td></tr>`
+        ).join("");
+        warnings.push(`<div class="alert alert-warning py-2 mb-2">
+          <div class="fw-semibold mb-1">Conflicting values were discarded while merging files</div>
+          <table class="table table-sm mb-0"><thead><tr><th>Field</th><th>Kept</th><th>Discarded</th><th>From</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>`);
+      }
+      document.getElementById("preview-warnings").innerHTML = warnings.join("");
+
+      document.getElementById("preview-dataset-fields").innerHTML =
+        (data.dataset_fields || []).map(f => _fieldRow(f, _DF)).join("");
+
+      const fieldsEl = document.getElementById("preview-fields");
+      if (!data.fields.length) {
+        fieldsEl.innerHTML = `<p class="text-muted mb-0">No schema selected — nothing to fill in. Review the extracted metadata below and upload.</p>`;
+      } else {
+        fieldsEl.innerHTML = _renderFieldGroups(data.fields, _PF);
+      }
+
+      const extra = {
+        "Scientific metadata not in the schema": data.unmapped,
+        "Other dataset fields": data.other_dataset_fields,
+        "Keywords": data.packet.keywords,
+        "Samples": data.packet.samples,
+        "Children": data.packet.children,
+        [`Thumbnails (${data.packet.thumbnail_count})`]: data.packet.thumbnail_count,
+      };
+      document.getElementById("preview-extra").innerHTML = Object.entries(extra).map(([title, value], i) => `
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#pv-acc-${i}">
+              ${escapeHtml(title)}
+            </button>
+          </h2>
+          <div id="pv-acc-${i}" class="accordion-collapse collapse" data-bs-parent="#preview-extra">
+            <div class="accordion-body"><pre class="mb-0 small">${escapeHtml(JSON.stringify(value, null, 2))}</pre></div>
+          </div>
+        </div>`).join("");
+
+      _updateClearedNote();
+      document.querySelectorAll("#preview-fields [data-key], #preview-dataset-fields [data-key]")
+        .forEach(el => el.addEventListener("input", _updateClearedNote));
+    }
+
+    // Emptying a parsed value does not delete it. The submitted edits skip blanks, and
+    // the re-parse on the server treats "" as absent and puts its own value back. Say so
+    // rather than letting the operator think the field was cleared.
+    function _updateClearedNote() {
+      const cleared = _allFields().filter(({ f, id }) => {
+        if (!f.editable || f.value === null || f.value === undefined || f.value === "") return false;
+        const el = document.getElementById(id);
+        return el && !el.disabled && el.value === "";
+      }).map(({ f }) => f);
+      const note = document.getElementById("preview-cleared-note");
+      note.classList.toggle("d-none", !cleared.length);
+      if (cleared.length) {
+        note.innerHTML =
+          `<div class="fw-semibold mb-1">Emptying a field will not clear it</div>` +
+          `${cleared.map(f => `<code>${escapeHtml(f.label)}</code>`).join(", ")} ` +
+          `will keep the parsed value. To change one, type the correct value instead of deleting it.`;
+      }
+    }
+
+    function _collectEdits(containerId) {
+      const edits = {};
+      document.querySelectorAll(`#${containerId} [data-key]`).forEach(el => {
+        if (el.disabled) return;
+        const raw = el.value;
+        const key = el.dataset.key;
+        const type = el.dataset.type;
+        if (raw === "") return;
+        if (type === "number" || type === "integer") {
+          const n = Number(raw);
+          if (!Number.isNaN(n)) edits[key] = n;
+        } else if (type === "boolean") {
+          edits[key] = raw === "true";
+        } else if (type === "array") {
+          const items = raw.split(",").map(s => s.trim()).filter(Boolean);
+          const itemType = el.dataset.items;
+          edits[key] = (itemType === "number" || itemType === "integer")
+            ? items.map(Number).filter(n => !Number.isNaN(n))
+            : items;
+        } else {
+          edits[key] = raw;
+        }
+      });
+      return edits;
+    }
+
+    async function confirmPreview() {
+      const btn = document.getElementById("btn-preview-confirm");
+      btn.disabled = true;
+      setSpinner("preview-confirm", true);
+      try {
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ..._previewParams,
+            session_folder_paths: _previewQueue[_previewIndex],
+            preview_dsid: _previewCurrent.dsid,
+            metadata_edits: _collectEdits("preview-fields"),
+            dataset_field_edits: _collectEdits("preview-dataset-fields"),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus("Upload failed: " + (data.error || res.status), "danger");
+          return;
+        }
+        _previewIndex += 1;
+        if (_previewIndex < _previewQueue.length) {
+          await _runPreviewStep();
+        } else {
+          previewModal.hide();
+          resetUploadModal();
+          if (!uploadModal) {
+            uploadModal = new bootstrap.Modal(document.getElementById("upload-modal"));
+          }
+          uploadModal.show();
+          showUploadSuccess("Upload running", data);
+        }
+      } catch (e) {
+        showStatus("Upload failed: " + e.message, "danger");
+      } finally {
+        btn.disabled = false;
+        setSpinner("preview-confirm", false);
+      }
+    }
+
+    async function cancelPreview() {
+      const dsid = _previewCurrent && _previewCurrent.dsid;
+      if (previewModal) previewModal.hide();
+      _previewQueue = [];
+      _previewCurrent = null;
+      if (dsid) {
+        fetch("/api/preview/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dsid }),
+        }).catch(() => {});
+      }
+    }
+
     async function startUploadRequest(params) {
       setSpinner("upload", true);
       document.getElementById("btn-upload").disabled = true;
@@ -991,7 +1493,7 @@
       }
       uploadModal.show();
 
-      const body = { ...params, dry_run: state.dryRun };
+      const body = { ...params };
       if (_selectedSessionDsid !== null) body.session_dsid = _selectedSessionDsid;
 
       try {
@@ -1002,44 +1504,17 @@
         });
 
         const data = await res.json();
-        document.getElementById("submitting-section").classList.add("d-none");
 
         if (res.ok) {
-          if (data.dry_run) {
-            uploadModal.hide();
-            showDryRunResults(data.results);
-            return;
-          }
-          const isSingleDataset = !!data.dsid;
-          document.getElementById("upload-modal-title").textContent =
-            isSingleDataset ? "Dataset created — upload running" : "Upload running";
-          document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
-          document.getElementById("success-section").classList.remove("d-none");
-
-          const prefectUrl = "http://127.0.0.1:4200/flow-runs/flow-run/" + data.flow_run_id;
-          document.getElementById("prefect-link").href = prefectUrl;
-
-          // Per-dataset link for session/single-insitu; project page link for multi.
-          const crucibleBaseUrl = "https://crucible.lbl.gov/explore";
-          const linkUrl = isSingleDataset
-            ? `${crucibleBaseUrl}/${data.project_id}/datasets/${data.dsid}`
-            : `${crucibleBaseUrl}/${data.project_id}/#tab=datasets`;
-          document.getElementById("crucible-link").href = linkUrl;
-          const qrContainer = document.getElementById("qr-code");
-          qrContainer.innerHTML = "";
-          new QRCode(qrContainer, { text: linkUrl, width: 256, height: 256 });
+          showUploadSuccess(
+            data.dsid ? "Dataset created — upload running" : "Upload running",
+            data,
+          );
         } else {
-          document.getElementById("upload-modal-title").textContent = "Upload Failed";
-          document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
-          document.getElementById("error-section").classList.remove("d-none");
-          document.getElementById("error-message").textContent = data.error || "Unknown error";
+          showUploadError(data.error);
         }
       } catch (e) {
-        document.getElementById("submitting-section").classList.add("d-none");
-        document.getElementById("upload-modal-title").textContent = "Upload Failed";
-        document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
-        document.getElementById("error-section").classList.remove("d-none");
-        document.getElementById("error-message").textContent = "Upload error: " + e.message;
+        showUploadError("Upload error: " + e.message);
       } finally {
         setSpinner("upload", false);
         document.getElementById("btn-upload").disabled = false;
@@ -1068,14 +1543,24 @@
       applyUploadModeUI();
       const isMultiAssignment = state.uiModes[instrument] === 'multi_assignment';
       const isPhotobox = state.uiModes[instrument] === 'photobox';
+      // Preview parses locally and needs one record per selection, so it only applies to
+      // instruments that upload files rather than whole sessions.
+      const isPreview = state.uiModes[instrument] === 'preview' && !state.isSession;
 
       // Hide all per-instrument panels
       document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
 
       document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment || isPhotobox);
-      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox);
+      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox || isPreview);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
+      document.getElementById("btn-preview").classList.toggle("d-none", !isPreview);
+      document.getElementById("schema-picker").classList.toggle("d-none", !isPreview);
+
+      if (isPreview) {
+        const schemaInput = document.getElementById("schema-path");
+        if (!schemaInput.value) schemaInput.value = state.defaultSchemas[instrument] || "";
+      }
 
       if (!isMultiAssignment && !isPhotobox) {
         _clearNirvanaUI();
@@ -1175,7 +1660,7 @@
         if (resolved) {
           const holderUuids = [...document.querySelectorAll(".ma-holder-uuid")]
             .map(el => el.value.trim()).filter(Boolean);
-          const parentUuid = holderUuids.length === 1 ? holderUuids[0] : holderUuids[0];
+          const parentUuid = holderUuids[0];
           _maAssignments.forEach(fileObj => {
             fileObj.samples = resolved.samples.map(s => ({...s}));
             fileObj.source = 'holders';
@@ -1233,10 +1718,7 @@
     }
 
     function _updateMaUploadButton() {
-      const hasParentChild = _maAssignments.some(f => f.upload_mode === 'parent_child');
-      const blocked = state.dryRun && hasParentChild;
-      document.getElementById("btn-ma-upload").disabled = blocked;
-      document.getElementById("dry-run-ma-warning").classList.toggle("d-none", !blocked);
+      document.getElementById("btn-ma-upload").disabled = false;
     }
 
     function _buildNirvanaTabs() {
@@ -1382,7 +1864,6 @@
         kw_list: getKeywords(),
         comments: document.getElementById("comments").value.trim() || null,
         assignments,
-        dry_run: state.dryRun,
       };
 
       document.getElementById("spinner-ma-upload").classList.remove("d-none");
@@ -1398,44 +1879,20 @@
           body: JSON.stringify(payload),
         });
         const data = await res.json();
-        document.getElementById("submitting-section").classList.add("d-none");
 
         if (res.ok) {
           const submitted = data.submitted || [];
-          if (state.dryRun) {
-            uploadModal.hide();
-            showDryRunResults(submitted);
-            return;
-          }
-          document.getElementById("upload-modal-title").textContent =
-            `${submitted.length} upload${submitted.length !== 1 ? "s" : ""} submitted`;
-          document.getElementById("upload-modal-header").classList.add("bg-success", "text-white");
-          document.getElementById("success-section").classList.remove("d-none");
-
-          // Point links to the first submitted run/dataset
+          // Point links at the first submitted run/dataset.
           const first = submitted[0] || {};
-          const prefectUrl = "http://127.0.0.1:4200/flow-runs/flow-run/" + (first.flow_run_id || "");
-          document.getElementById("prefect-link").href = prefectUrl;
-          const crucibleBaseUrl = "https://crucible.lbl.gov/explore";
-          const linkUrl = first.dsid
-            ? `${crucibleBaseUrl}/${project_id}/datasets/${first.dsid}`
-            : `${crucibleBaseUrl}/${project_id}/#tab=datasets`;
-          document.getElementById("crucible-link").href = linkUrl;
-          const qrContainer = document.getElementById("qr-code");
-          qrContainer.innerHTML = "";
-          new QRCode(qrContainer, { text: linkUrl, width: 256, height: 256 });
+          showUploadSuccess(
+            `${submitted.length} upload${submitted.length !== 1 ? "s" : ""} submitted`,
+            { ...first, project_id },
+          );
         } else {
-          document.getElementById("upload-modal-title").textContent = "Upload Failed";
-          document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
-          document.getElementById("error-section").classList.remove("d-none");
-          document.getElementById("error-message").textContent = data.error || "Unknown error";
+          showUploadError(data.error);
         }
       } catch (e) {
-        document.getElementById("submitting-section").classList.add("d-none");
-        document.getElementById("upload-modal-title").textContent = "Upload Failed";
-        document.getElementById("upload-modal-header").classList.add("bg-danger", "text-white");
-        document.getElementById("error-section").classList.remove("d-none");
-        document.getElementById("error-message").textContent = "Upload error: " + e.message;
+        showUploadError("Upload error: " + e.message);
       } finally {
         document.getElementById("spinner-ma-upload").classList.add("d-none");
         document.getElementById("btn-ma-upload").disabled = false;
@@ -1518,7 +1975,6 @@
         document.getElementById("cfg-browse-dir").value = c.DEFAULT_BROWSE_DIR || "";
         document.getElementById("cfg-chain-postproc").checked = !!c.CHAIN_POST_PROCESSING;
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
-        document.getElementById("cfg-dry-run").checked = !!c.DRY_RUN;
         cfgState.fileTypes = [...(c.ACCEPTABLE_FILE_TYPES || [])];
         renderFileTypeChips();
 
@@ -1583,7 +2039,6 @@
         ACCEPTABLE_FILE_TYPES: cfgState.fileTypes,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
-        DRY_RUN: document.getElementById("cfg-dry-run").checked,
       };
 
       document.getElementById("spinner-save-config").classList.remove("d-none");
@@ -1608,40 +2063,6 @@
         document.getElementById("spinner-save-config").classList.add("d-none");
         document.getElementById("btn-save-config").disabled = false;
       }
-    }
-
-    // -------------------------------------------------------------------------
-    // Dry run results display
-    // -------------------------------------------------------------------------
-    let dryRunModal = null;
-
-    function showDryRunResults(results) {
-      const body = document.getElementById("dry-run-modal-body");
-      body.innerHTML = "";
-
-      results.forEach((r, idx) => {
-        const section = document.createElement("div");
-        section.className = "mb-4";
-
-        const header = document.createElement("strong");
-        header.className = "d-block mb-2";
-        header.textContent = r.file || "";
-        section.appendChild(header);
-
-        const pre = document.createElement("pre");
-        pre.className = "bg-light border rounded p-2 small overflow-auto";
-        pre.style.maxHeight = "400px";
-        pre.textContent = JSON.stringify(r.packet || {}, null, 2);
-        section.appendChild(pre);
-
-        if (idx < results.length - 1) {
-          section.appendChild(document.createElement("hr"));
-        }
-        body.appendChild(section);
-      });
-
-      if (!dryRunModal) dryRunModal = new bootstrap.Modal(document.getElementById("dry-run-modal"));
-      dryRunModal.show();
     }
 
     document.getElementById("upload-modal").addEventListener("hidden.bs.modal", function () {

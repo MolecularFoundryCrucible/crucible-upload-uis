@@ -1,18 +1,17 @@
 import os
 HOME = os.environ.get('HOME')
 
-DEFAULT_BROWSE_DIR = '/home/timko/Documents'
+DEFAULT_BROWSE_DIR = '/Users/mkwall/Documents/Test Data Folders'
 # True  = pick a folder; create parent session dataset + one child dataset per file inside
 # False = pick one or more files; each becomes its own standalone dataset (or insitu, per instrument)
 IS_SESSION = False
-DEFAULT_INSTRUMENT_NAME = 'nirvana'
+DEFAULT_INSTRUMENT_NAME = 'gc-b30-001'
 DEFAULT_INGESTOR = ''
 
 # True  = run an instrument's post-processing requests sequentially; each depends on
 #         the previous succeeding (a failure halts the rest).
 # False = request all of them in parallel (independent of each other).
 CHAIN_POST_PROCESSING = True
-DRY_RUN = True
 
 PRINT_BARCODE_ENABLED = False
 ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg', '.mrc', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}

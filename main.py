@@ -3,6 +3,7 @@ Crucible Upload UI — Flask backend
 """
 import ast
 import importlib
+import json
 import logging
 import os
 import queue
@@ -14,6 +15,7 @@ from tkinter import filedialog
 from flask import Flask, jsonify, render_template, request
 
 import crucible
+from crucible.utils.io import get_tz_isoformat
 import prefect_backend as backend
 import instrument_conf as conf
 from instruments import registry
@@ -42,7 +44,7 @@ def _check_browse_queue():
     Always returns a list of paths via _browse_result so the API has a uniform shape.
     """
     try:
-        _browse_request.get_nowait()
+        mode = _browse_request.get_nowait()
     except queue.Empty:
         _tk_root.after(50, _check_browse_queue)
         return
@@ -50,7 +52,14 @@ def _check_browse_queue():
         # Realize/flush the root so the dialog reliably comes to front on macOS,
         # where the first invocation otherwise returns empty.
         _tk_root.update()
-        if conf.IS_SESSION:
+        if mode == "schema":
+            path = filedialog.askopenfilename(
+                master=_tk_root,
+                title="Select JSON Schema file",
+                filetypes=[("JSON Schema", "*.json"), ("All files", "*.*")],
+            )
+            paths = [path] if path else []
+        elif conf.IS_SESSION:
             kwargs = {"master": _tk_root, "title": "Select session folder"}
             if conf.DEFAULT_BROWSE_DIR:
                 kwargs["initialdir"] = conf.DEFAULT_BROWSE_DIR
@@ -78,7 +87,6 @@ def _drain(q: queue.Queue):
 def index():
     return render_template("index.html",
                            print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
-                           dry_run=conf.DRY_RUN,
                            crucible_version=crucible.__version__,
                            instruments=registry.INSTRUMENTS,
                            panel_templates=registry.PANEL_TEMPLATES,
@@ -96,6 +104,7 @@ def get_instruments():
         "holder_layouts": registry.INSTRUMENT_HOLDER_LAYOUTS,
         "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
         "default_ingestors": registry.INSTRUMENT_INGESTORS,
+        "default_schemas": registry.INSTRUMENT_SCHEMAS,
         "instrument_session_modes": registry.INSTRUMENT_SESSION_MODES,
     })
 
@@ -112,12 +121,13 @@ def get_ingestors():
 
 @app.get("/api/browse")
 def browse():
+    mode = request.args.get("mode", "default")
     # One dialog at a time. Drain any leftover request/result from a prior call
     # (e.g. a dialog the user abandoned) so we never return a stale selection.
     with _browse_lock:
         _drain(_browse_request)
         _drain(_browse_result)
-        _browse_request.put(True)
+        _browse_request.put(mode)
         try:
             paths = _browse_result.get(timeout=300)
         except queue.Empty:
@@ -141,7 +151,6 @@ EDITABLE_FIELDS = {
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
     "ACCEPTABLE_FILE_TYPES": "set_str",
-    "DRY_RUN": "bool",
 }
 
 
@@ -368,6 +377,113 @@ def session_check():
     return jsonify({"sessions": sessions})
 
 
+@app.post("/api/preview")
+def do_preview():
+    """Parse locally and hand back what was extracted, so the operator can correct it
+    before anything is pushed. Read-only as far as Crucible is concerned."""
+    data = request.json or {}
+    required = ["orcid", "project_id", "instrument_name"]
+    missing = [f for f in required if not (data.get(f) or "").strip()]
+    if missing:
+        return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
+
+    files = [p for p in (data.get("files") or []) if p]
+    if not files:
+        return jsonify({"error": "Missing field: files"}), 400
+
+    orcid = data["orcid"].strip()
+    project_id = data["project_id"].strip()
+    instrument_name = data["instrument_name"].strip()
+    ingestor = (data.get("ingestor") or "").strip()
+    schema_path = (data.get("schema_path") or "").strip()
+    comments = (data.get("comments") or "").strip()
+    kw_list = data.get("keywords") or []
+
+    schema = {}
+    if schema_path:
+        try:
+            with open(schema_path) as f:
+                schema = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            return jsonify({"error": f"Could not read schema: {e}"}), 400
+
+    # Nothing is written to Crucible here. The dsid is only resolved, not created — either
+    # an existing record matched by SHA, or a fresh mfid that stays unused until the
+    # operator confirms. parse() tolerates a dsid with no record behind it: it 404s
+    # internally and simply contributes no pre-existing values. That keeps an abandoned
+    # preview from leaving a stale empty dataset.
+    try:
+        valid = backend.existing_dsids(orcid, project_id)
+        dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
+        packet, collisions, parsed_by, skipped = backend.parse_for_preview(files, dsid, ingestor)
+    except Exception as e:
+        backend.logger.exception("preview failed")
+        return jsonify({"error": str(e)}), 400
+
+    # Server-side ingestion records its githash and class on the IngestionRequest rather
+    # than the dataset, so a locally parsed and hand-corrected record would otherwise carry
+    # no trace of how it was produced. Recorded per file because a named ingestor that does
+    # not support a file is silently swapped for an auto-detected one.
+    provenance = {
+        "parsed_locally": True,
+        "parsed_at": get_tz_isoformat(),
+        "reviewed_by": orcid,
+        "files": parsed_by,
+    }
+    githash = backend.ingestion_githash()
+    if githash:
+        provenance["ingestion_githash"] = githash
+    if ingestor:
+        provenance["requested_ingestion_class"] = ingestor
+    if skipped:
+        provenance["unparsed_files"] = skipped
+    packet.scientific_metadata["parse_provenance"] = provenance
+
+    # With no record behind the dsid, parse() has no project/owner/instrument to read
+    # back, so fill them from the form. These are what create_dataset will use at upload
+    # time; showing them now keeps the preview an honest picture of the finished record.
+    for field, value in (("project_id", project_id),
+                         ("owner_orcid", orcid),
+                         ("instrument_name", instrument_name)):
+        if value and not packet.dataset_fields.get(field):
+            packet.dataset_fields[field] = value
+
+    if comments:
+        packet.scientific_metadata.setdefault("comments", comments)
+    if kw_list:
+        packet.keywords = backend._dedup(list(packet.keywords) + list(kw_list))
+
+    packet.to_json(str(backend.preview_packet_path(dsid)))
+
+    fields = backend.build_form_descriptor(schema, packet.scientific_metadata)
+    return jsonify({
+        "dsid": dsid,
+        "reused_dataset": reused,
+        "packet": backend.preview_view(packet),
+        "fields": fields,
+        "dataset_fields": backend.build_dataset_form_descriptor(packet.dataset_fields),
+        "other_dataset_fields": backend.other_dataset_fields(packet.dataset_fields),
+        "unmapped": backend.unmapped_metadata(fields, packet.scientific_metadata),
+        "collisions": collisions,
+        "requested_ingestor": ingestor,
+        "actual_ingestor": packet.ingestion_class,
+        "skipped": skipped,
+        "files": [os.path.basename(p) for p in files],
+    })
+
+
+@app.post("/api/preview/cancel")
+def cancel_preview():
+    """Drop an abandoned preview. Only the packet on disk needs clearing — preview never
+    created a record, so there is nothing in Crucible to delete."""
+    dsid = ((request.json or {}).get("dsid") or "").strip()
+    try:
+        backend.delete_preview_packet(dsid)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True})
+
+
 @app.post("/api/upload")
 def do_upload():
     data = request.json or {}
@@ -384,7 +500,6 @@ def do_upload():
     session_dsid = data.get("session_dsid", None)
     comments = data.get("comments", "").strip()
     kw_list = data.get("keywords", []) or extract_keywords(comments, instrument_name)
-    dry_run = data.get("dry_run", conf.DRY_RUN)
 
     # Non-session mode: caller sends a list of file paths; session mode: a single folder path.
     # Per-instrument IS_SESSION overrides the global config default.
@@ -399,6 +514,44 @@ def do_upload():
             return jsonify({"error": "Missing field: session_folder_paths"}), 400
 
     from prefect.deployments import run_deployment
+
+    # Reviewed-preview upload. The record and the parsed packet already exist; apply the
+    # operator's corrections and hand the flow the dsid. The flow writes the corrected
+    # metadata before attaching the files, so the server-side ingestion it triggers merges
+    # into the operator's values rather than replacing them.
+    preview_dsid = (data.get("preview_dsid") or "").strip()
+    if preview_dsid:
+        try:
+            packet = backend.load_preview_packet(preview_dsid)
+            backend.apply_metadata_edits(packet, data.get("metadata_edits") or {})
+            backend.apply_dataset_field_edits(packet, data.get("dataset_field_edits") or {})
+            packet.to_json(str(backend.preview_packet_path(preview_dsid)))
+        except (ValueError, OSError) as e:
+            return jsonify({"error": f"Preview expired or invalid: {e}"}), 400
+        try:
+            flow_run = run_deployment(
+                "preview-upload/preview-upload",
+                parameters={
+                    "files": session_folder_paths,
+                    "dsid": preview_dsid,
+                    "instrument_name": instrument_name,
+                    "project_id": project_id,
+                    "orcid": orcid,
+                    "sample_unique_id": sample_unique_id,
+                    "session_dsid": session_dsid,
+                    "ingestor": ingestor,
+                    "comments": comments,
+                },
+                timeout=0,
+            )
+            return jsonify({
+                "flow_run_id": str(flow_run.id),
+                "project_id": project_id,
+                "dsid": preview_dsid,
+            })
+        except Exception as e:
+            backend.logger.error(e)
+            return jsonify({"error": str(e)}), 500
 
     if is_session:
         # Session mode — existing behavior. Create parent session record sync so
@@ -445,29 +598,23 @@ def do_upload():
             backend.logger.error(e)
             return jsonify({"error": str(e)}), 500
 
-    # Non-session mode: each selected file becomes its own dataset. Post-processing
-    # (e.g. insitu aggregation) is handled inside upload_dataset per instrument config,
-    # so no instrument special-casing is needed here.
-    # - Single file: sync SHA lookup so the UI gets the dsid (existing or fresh mfid)
-    #   immediately; fire one upload-dataset run and show the dataset page.
-    # - N>1 files: one multi_file_upload run that builds the SHA map once and fans
-    #   out per-file upload_dataset sub-flows; UI shows the project page.
-    if len(session_folder_paths) == 1:
-        path = session_folder_paths[0]
-        if dry_run:
-            try:
-                packet = backend.run_dry_ingest(path, ingestor or "")
-                return jsonify({"dry_run": True, "results": [{"file": os.path.basename(path), "packet": packet}]})
-            except Exception as e:
-                backend.logger.error(e)
-                return jsonify({"error": str(e)}), 500
+    # Non-session mode. Post-processing (e.g. insitu aggregation) is handled inside
+    # upload_dataset per instrument config, so no instrument special-casing is needed.
+    # - One dataset (a single file, or several the operator chose to keep together):
+    #   sync SHA lookup so the UI gets the dsid immediately, then one upload-dataset run.
+    #   Dedup is on the first file's SHA, so re-uploading resumes the existing record.
+    # - Otherwise: one multi_file_upload run that builds the SHA map once and fans out
+    #   per-file upload_dataset sub-flows; UI shows the project page.
+    group_as_one = bool(data.get("group_as_one"))
+    if len(session_folder_paths) == 1 or group_as_one:
+        paths = session_folder_paths
         try:
             valid_dsids = backend.existing_dsids(orcid, project_id)
-            dsid, _ = backend.resolve_dsid_for_file(path, valid_dsids)
+            dsid, _ = backend.resolve_dsid_for_file(paths[0], valid_dsids)
             flow_run = run_deployment(
                 "upload-dataset/upload-dataset",
                 parameters={
-                    "files": [path],
+                    "files": paths,
                     "dsid": dsid,
                     "instrument_name": instrument_name,
                     "project_id": project_id,
@@ -490,16 +637,6 @@ def do_upload():
 
     # Generic multi-file path: fire one multi_file_upload run; it handles SHA
     # dedup and fans out per-file upload_dataset sub-flows.
-    if dry_run:
-        results = []
-        for path in session_folder_paths:
-            try:
-                packet = backend.run_dry_ingest(path, ingestor or "")
-                results.append({"file": os.path.basename(path), "packet": packet})
-            except Exception as e:
-                backend.logger.error(e)
-                return jsonify({"error": f"Dry run failed for {os.path.basename(path)}: {e}"}), 500
-        return jsonify({"dry_run": True, "results": results})
     try:
         flow_run = run_deployment(
             "multi-file-upload/multi-file-upload",
@@ -588,11 +725,15 @@ def resolve_holders():
 
 
 def _next_carrier_name(project_id: str) -> str:
-    import re
-    existing = backend.client.samples.list(project_id=project_id)
-    nums = [int(m.group(1)) for s in existing
-            if (m := re.match(r'CAR(\d+)$', s.get("sample_name", "")))]
-    return f"CAR{((max(nums) + 1) if nums else 1):06d}"
+    # limit=None to page past the default 100: missing the highest CARnnnnnn would
+    # hand back an already-used name. Names are zero-padded, so sorting is numeric.
+    existing = backend.client.samples.list(
+        project_id=project_id, sample_type="thin film carrier", limit=None
+    )
+    names = sorted(s["sample_name"] for s in existing if s.get("sample_name"))
+    if not names:
+        return "CAR000001"
+    return f"CAR{int(names[-1].replace('CAR', '')) + 1:06d}"
 
 
 @app.get("/api/photobox/next_carrier_name")
@@ -692,19 +833,25 @@ def multi_assignment_upload():
     kw_list = data.get("kw_list") or []
     comments = data.get("comments") or None
     assignments = data.get("assignments") or []
-    dry_run = data.get("dry_run", conf.DRY_RUN)
 
     if not orcid or not project_id:
         return jsonify({"error": "orcid and project_id required"}), 400
     if not assignments:
         return jsonify({"error": "assignments list required"}), 400
 
-    # Only 'single' mode needs SHA dedup; fetch once for those items.
-    single_items = [a for a in assignments if (a.get("upload_mode") or "single") == "single"]
-    valid_dsids = {}
-    if single_items:
+    # Only 'single' mode needs a dsid up front: prefer the id embedded in the h5, and
+    # fall back to a SHA lookup. That reads the whole file, so resolve them in parallel
+    # instead of once per item inside the submit loop.
+    single_paths = [a["file"] for a in assignments
+                    if (a.get("upload_mode") or "single") == "single" and a.get("file")]
+    resolved_dsids = {}
+    if single_paths:
         try:
             valid_dsids = backend.existing_dsids(orcid, project_id)
+            resolved_dsids = {p: backend.read_h5_dsid(p) for p in dict.fromkeys(single_paths)}
+            needs_sha = [p for p, dsid in resolved_dsids.items() if not dsid]
+            for path, (dsid, _) in zip(needs_sha, backend.resolve_dsids_parallel(needs_sha, valid_dsids)):
+                resolved_dsids[path] = dsid
         except Exception as e:
             backend.logger.error(e)
             return jsonify({"error": str(e)}), 500
@@ -720,10 +867,6 @@ def multi_assignment_upload():
                       kw_list=kw_list, comments=comments, ingestor=ingestor)
         try:
             if upload_mode == "flat_multi":
-                if dry_run:
-                    packet = backend.run_dry_ingest(file_path, ingestor or "")
-                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "packet": packet})
-                    continue
                 sample_uuids = item.get("sample_uuids") or []
                 flow_run = run_deployment(
                     "flat-multi-upload/flat-multi-upload",
@@ -746,13 +889,9 @@ def multi_assignment_upload():
                 submitted.append({"file": os.path.basename(file_path), "flow_run_id": str(flow_run.id)})
 
             else:  # 'single'
-                if dry_run:
-                    packet = backend.run_dry_ingest(file_path, ingestor or "")
-                    submitted.append({"file": os.path.basename(file_path), "dry_run": True, "packet": packet})
-                    continue
                 sample_uuids = item.get("sample_uuids") or []
                 link_samples = bool(item.get("link_samples", False))
-                dsid = backend.read_h5_dsid(file_path) or backend.resolve_dsid_for_file(file_path, valid_dsids)[0]
+                dsid = resolved_dsids.get(file_path)
                 flow_run = run_deployment(
                     "multi-assignment-upload/multi-assignment-upload",
                     parameters={"file": file_path, "sample_uuids": sample_uuids,
@@ -772,7 +911,7 @@ def multi_assignment_upload():
 
 
 if __name__ == "__main__":
-    _write_config({"DRY_RUN": False})
+    backend.purge_stale_previews()
 
     # Flask runs in a daemon thread; tkinter mainloop holds the main thread.
     port = int(os.environ.get("FLASK_PORT", 5000))

@@ -1,11 +1,10 @@
-NAME = 'm3_microscope'
+NAME = 'gc-b30-001'
 INGESTOR = ''
-UI_MODE = 'standard'
-DEFAULT_SCHEMA = ''
+UI_MODE = 'preview'
+DEFAULT_SCHEMA = '/Users/mkwall/Git/crucible-main/schema.json'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
-IS_SESSION = True
-FLOW = 'session-upload/session-upload'
+FLOW = None
 POST_PROCESSING = []
 PANEL_TEMPLATE = None
 FILE_PARSER = None

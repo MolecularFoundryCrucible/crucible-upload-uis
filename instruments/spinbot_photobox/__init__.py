@@ -1,6 +1,7 @@
 NAME = 'spinbot_photobox'
 INGESTOR = ''
 UI_MODE = 'photobox'
+DEFAULT_SCHEMA = ''
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
 FLOW = 'photobox-upload/photobox-upload'

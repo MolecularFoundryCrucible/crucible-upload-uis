@@ -30,7 +30,7 @@ Once data is uploaded, it can be viewed in the [Crucible Web Explorer](https://c
 
 ### Set Up
 1. Clone this repository `git clone https://github.com/MolecularFoundryCrucible/crucible-upload-uis.git`
-2. Create the uv virtual environment (alternatively, use the package manager of your choice and install from requirements-flask.txt)
+2. Create the uv virtual environment
 ```
 cd crucible-upload-uis
 uv sync

@@ -67,7 +67,7 @@
     .field-row:hover { background: var(--cru-surface-alt); }
     .field-row .col-form-label { color: var(--cru-ink); font-weight: 500; }
     .field-row .form-text { color: var(--cru-muted); font-size: 0.75rem; }
-    .field-row input:disabled, .field-row select:disabled {
+    .field-row input:disabled, .field-row select:disabled, .field-row textarea:disabled {
       background: var(--cru-surface-alt);
       color: var(--cru-muted);
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -88,6 +88,13 @@
       color: var(--cru-ink);
       margin-bottom: 0.25rem;
     }
+    button.field-group-title::before {
+      content: "\25BE";
+      display: inline-block;
+      width: 1em;
+      transition: transform 0.15s;
+    }
+    button.field-group-title.collapsed::before { transform: rotate(-90deg); }
   </style>
 </head>
 <body>
@@ -150,18 +157,6 @@
             <select id="ingestor" class="form-select mb-3">
               <option value="">(auto-detect)</option>
             </select>
-
-            <!-- Metadata schema (preview mode only) -->
-            <div id="schema-picker" class="d-none">
-              <label class="form-label fw-semibold">Metadata schema</label>
-              <div class="input-group">
-                <input id="schema-path" type="text" class="form-control"
-                       placeholder="Optional JSON Schema" readonly />
-                <button class="btn btn-outline-secondary" type="button" onclick="browseSchema()">Browse</button>
-                <button class="btn btn-outline-secondary" type="button" onclick="clearSchema()">Clear</button>
-              </div>
-              <div class="form-text">Fields it requires are flagged if the parser didn't find them.</div>
-            </div>
 
           </div>
         </div>
@@ -535,9 +530,27 @@
           </section>
 
           <section class="form-section">
-            <h6 class="form-section-title">Scientific metadata</h6>
-            <p class="form-section-hint">Values read from your files, checked against the schema.</p>
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <h6 class="form-section-title">Scientific metadata</h6>
+                <p class="form-section-hint">Values read from your files. Correct anything that is wrong.</p>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="preview-missing-only"
+                       onchange="applyMissingFilter()" />
+                <label class="form-check-label small" for="preview-missing-only">Show only missing</label>
+              </div>
+            </div>
             <div id="preview-fields"></div>
+
+            <div id="preview-added-fields" class="mt-2"></div>
+            <button class="btn btn-sm btn-outline-secondary mt-2" type="button" onclick="addPreviewField()">
+              + Add field
+            </button>
+            <div class="form-text">
+              Values are read as JSON, so <code>2</code> is saved as a number and <code>abc</code> as text.
+              Wrap a value in quotes — <code>"0012"</code> — to keep it text.
+            </div>
           </section>
 
           <div class="accordion mt-3" id="preview-extra"></div>
@@ -568,7 +581,6 @@
       defaultHolderLayouts: {},
       activeHolderLayout: {},
       defaultIngestors: {},
-      defaultSchemas: {},
     };
 
     // -------------------------------------------------------------------------
@@ -593,7 +605,6 @@
       state.holderLayouts = data.holder_layouts || {};
       state.defaultHolderLayouts = data.default_holder_layouts || {};
       state.defaultIngestors = data.default_ingestors || {};
-      state.defaultSchemas = data.default_schemas || {};
       state.configDefaultIngestor = data.default_ingestor || "";
       state.instrumentSessionModes = data.instrument_session_modes || {};
       state.globalIsSession = !!data.is_session;
@@ -1166,18 +1177,6 @@
     let _previewCurrent = null;
     let _previewParams = null;
 
-    async function browseSchema() {
-      const res = await fetch("/api/browse?mode=schema");
-      const data = await res.json();
-      if (data.paths && data.paths[0]) {
-        document.getElementById("schema-path").value = data.paths[0];
-      }
-    }
-
-    function clearSchema() {
-      document.getElementById("schema-path").value = "";
-    }
-
     function _previewValidate() {
       const missing = [];
       if (!state.orcid) missing.push("email (look up user first)");
@@ -1200,7 +1199,6 @@
         project_id: document.getElementById("project").value,
         instrument_name: document.getElementById("instrument").value,
         ingestor: document.getElementById("ingestor").value || null,
-        schema_path: document.getElementById("schema-path").value || null,
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
         keywords: getKeywords(),
@@ -1253,14 +1251,13 @@
       const id = `${prefix}${escapeHtml(f.key)}`;
       const val = f.value === null || f.value === undefined ? "" : f.value;
       const common = `id="${id}" data-key="${escapeHtml(f.key)}" data-type="${f.type}" data-items="${f.items_type || ""}" class="form-control form-control-sm"`;
+      if (f.type === "json") {
+        const text = JSON.stringify(f.value, null, 2);
+        const rows = Math.min(8, (text.match(/\n/g) || []).length + 1);
+        return `<textarea ${common} rows="${rows}" disabled>${escapeHtml(text)}</textarea>`;
+      }
       if (!f.editable) {
         return `<input ${common} value="${escapeHtml(JSON.stringify(f.value))}" disabled />`;
-      }
-      if (f.enum) {
-        const opts = ['<option value=""></option>'].concat(
-          f.enum.map(o => `<option value="${escapeHtml(o)}" ${o === f.value ? "selected" : ""}>${escapeHtml(o)}</option>`)
-        ).join("");
-        return `<select ${common.replace("form-control form-control-sm", "form-select form-select-sm")}>${opts}</select>`;
       }
       if (f.type === "boolean") {
         return `<select ${common.replace("form-control form-control-sm", "form-select form-select-sm")}>
@@ -1279,36 +1276,72 @@
 
     function _fieldRow(f, prefix) {
       return `
-        <div class="field-row row align-items-center">
+        <div class="field-row row align-items-center" data-missing="${f.missing ? "1" : "0"}">
           <label class="col-sm-4 col-form-label col-form-label-sm" for="${prefix}${escapeHtml(f.key)}">
             ${escapeHtml(f.label)}
             ${!f.editable ? '<span class="badge text-bg-secondary ms-1">read-only</span>' : ""}
-            <div class="form-text mt-0">${escapeHtml(f.description)}</div>
+            ${f.missing ? '<span class="badge text-bg-warning ms-1">missing</span>' : ""}
           </label>
           <div class="col-sm-8">${_fieldInput(f, prefix)}</div>
         </div>`;
     }
 
-    // Nested schema objects arrive flattened into dotted paths. Re-nest them visually:
-    // a heading per object, its children indented under it.
+    // How many missing fields sit under each nested path, so a collapsed group can say
+    // what is hiding inside it and the filter knows which groups to drop.
+    function _missingCounts(fields) {
+      const counts = {};
+      for (const f of fields) {
+        if (!f.missing) continue;
+        const ancestors = (f.path || []).slice(0, -1);
+        for (let i = 1; i <= ancestors.length; i++) {
+          const key = ancestors.slice(0, i).join(".");
+          counts[key] = (counts[key] || 0) + 1;
+        }
+      }
+      return counts;
+    }
+
+    // Nested metadata arrives depth-first, so a dict's fields are contiguous. Re-nest them:
+    // top-level values inline, each nested dict a collapsed section.
     function _renderFieldGroups(fields, prefix) {
+      const counts = _missingCounts(fields);
       const out = [];
       let open = [];
+      let gid = 0;
       for (const f of fields) {
         const ancestors = (f.path || []).slice(0, -1);
         const labels = f.group_labels || ancestors;
         let shared = 0;
         while (shared < open.length && shared < ancestors.length && open[shared] === ancestors[shared]) shared++;
-        for (let i = open.length; i > shared; i--) out.push("</div>");
+        for (let i = open.length; i > shared; i--) out.push("</div></div>");
         for (let i = shared; i < ancestors.length; i++) {
-          out.push(`<div class="field-group">
-            <div class="field-group-title">${escapeHtml(labels[i] || ancestors[i])}</div>`);
+          const path = ancestors.slice(0, i + 1).join(".");
+          const n = counts[path] || 0;
+          const id = `${prefix}grp-${gid++}`;
+          out.push(`<div class="field-group" data-missing-count="${n}">
+            <button class="field-group-title btn btn-sm btn-link text-decoration-none px-0 collapsed"
+                    type="button" data-bs-toggle="collapse" data-bs-target="#${id}">
+              ${escapeHtml(labels[i] || ancestors[i])}
+              ${n ? `<span class="badge text-bg-warning ms-1">${n} missing</span>` : ""}
+            </button>
+            <div class="collapse" id="${id}">`);
         }
         open = ancestors;
         out.push(_fieldRow(f, prefix));
       }
-      for (let i = open.length; i > 0; i--) out.push("</div>");
+      for (let i = open.length; i > 0; i--) out.push("</div></div>");
       return out.join("");
+    }
+
+    function applyMissingFilter() {
+      const on = document.getElementById("preview-missing-only").checked;
+      document.querySelectorAll("#preview-fields .field-row, #preview-dataset-fields .field-row")
+        .forEach(row => row.classList.toggle("d-none", on && row.dataset.missing !== "1"));
+      document.querySelectorAll("#preview-fields .field-group").forEach(g => {
+        const n = parseInt(g.dataset.missingCount || "0", 10);
+        g.classList.toggle("d-none", on && n === 0);
+        if (on && n) g.querySelector(".collapse").classList.add("show");
+      });
     }
 
     function _allFields() {
@@ -1337,15 +1370,6 @@
       if (data.actual_ingestor && data.requested_ingestor && data.requested_ingestor !== data.actual_ingestor) {
         warnings.push(`<div class="alert alert-warning py-2">You selected <code>${escapeHtml(data.requested_ingestor)}</code> but <code>${escapeHtml(data.actual_ingestor)}</code> actually ran.</div>`);
       }
-      if (data.collisions && data.collisions.length) {
-        const rows = data.collisions.map(c =>
-          `<tr><td><code>${escapeHtml(c.field)}</code></td><td>${escapeHtml(JSON.stringify(c.kept))}</td><td class="text-muted">${escapeHtml(JSON.stringify(c.discarded))}</td><td>${escapeHtml(c.file || "")}</td></tr>`
-        ).join("");
-        warnings.push(`<div class="alert alert-warning py-2 mb-2">
-          <div class="fw-semibold mb-1">Conflicting values were discarded while merging files</div>
-          <table class="table table-sm mb-0"><thead><tr><th>Field</th><th>Kept</th><th>Discarded</th><th>From</th></tr></thead><tbody>${rows}</tbody></table>
-        </div>`);
-      }
       document.getElementById("preview-warnings").innerHTML = warnings.join("");
 
       document.getElementById("preview-dataset-fields").innerHTML =
@@ -1353,18 +1377,19 @@
 
       const fieldsEl = document.getElementById("preview-fields");
       if (!data.fields.length) {
-        fieldsEl.innerHTML = `<p class="text-muted mb-0">No schema selected — nothing to fill in. Review the extracted metadata below and upload.</p>`;
+        fieldsEl.innerHTML = `<p class="text-muted mb-0">Nothing was extracted from these files. Use Add field to record anything you want kept.</p>`;
       } else {
         fieldsEl.innerHTML = _renderFieldGroups(data.fields, _PF);
       }
 
+      document.getElementById("preview-added-fields").innerHTML = "";
+      document.getElementById("preview-missing-only").checked = false;
+
       const extra = {
-        "Scientific metadata not in the schema": data.unmapped,
         "Other dataset fields": data.other_dataset_fields,
         "Keywords": data.packet.keywords,
         "Samples": data.packet.samples,
         "Children": data.packet.children,
-        [`Thumbnails (${data.packet.thumbnail_count})`]: data.packet.thumbnail_count,
       };
       document.getElementById("preview-extra").innerHTML = Object.entries(extra).map(([title, value], i) => `
         <div class="accordion-item">
@@ -1400,6 +1425,40 @@
           `${cleared.map(f => `<code>${escapeHtml(f.label)}</code>`).join(", ")} ` +
           `will keep the parsed value. To change one, type the correct value instead of deleting it.`;
       }
+    }
+
+    function addPreviewField() {
+      const row = document.createElement("div");
+      row.className = "row g-2 align-items-center mb-2 added-field";
+      row.innerHTML = `
+        <div class="col-sm-4">
+          <input type="text" class="form-control form-control-sm added-key" placeholder="Field name" />
+        </div>
+        <div class="col-sm-7">
+          <input type="text" class="form-control form-control-sm added-value" placeholder="Value" />
+        </div>
+        <div class="col-sm-1">
+          <button class="btn btn-sm btn-outline-secondary" type="button" title="Remove">&times;</button>
+        </div>`;
+      row.querySelector("button").onclick = () => row.remove();
+      document.getElementById("preview-added-fields").appendChild(row);
+    }
+
+    // Free text is read as JSON so numbers and booleans land as themselves, falling back to
+    // the raw string when it is not valid JSON.
+    function _collectAddedFields() {
+      const edits = {};
+      document.querySelectorAll("#preview-added-fields .added-field").forEach(row => {
+        const key = row.querySelector(".added-key").value.trim();
+        const raw = row.querySelector(".added-value").value;
+        if (!key || raw === "") return;
+        try {
+          edits[key] = JSON.parse(raw);
+        } catch {
+          edits[key] = raw;
+        }
+      });
+      return edits;
     }
 
     function _collectEdits(containerId) {
@@ -1440,7 +1499,7 @@
             ..._previewParams,
             session_folder_paths: _previewQueue[_previewIndex],
             preview_dsid: _previewCurrent.dsid,
-            metadata_edits: _collectEdits("preview-fields"),
+            metadata_edits: { ..._collectEdits("preview-fields"), ..._collectAddedFields() },
             dataset_field_edits: _collectEdits("preview-dataset-fields"),
           }),
         });
@@ -1555,12 +1614,6 @@
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
       document.getElementById("btn-preview").classList.toggle("d-none", !isPreview);
-      document.getElementById("schema-picker").classList.toggle("d-none", !isPreview);
-
-      if (isPreview) {
-        const schemaInput = document.getElementById("schema-path");
-        if (!schemaInput.value) schemaInput.value = state.defaultSchemas[instrument] || "";
-      }
 
       if (!isMultiAssignment && !isPhotobox) {
         _clearNirvanaUI();

@@ -1,0 +1,380 @@
+/* Theme layer over Bootstrap 5, matching the sample-creators palette.
+   Loaded after bootstrap.min.css and after the inline <style> block, so the
+   :root values below also retune the app's existing --cru-* rules. */
+
+/* ========== Palette ========== */
+:root {
+    --cru-navy: #1a365d;
+    --cru-accent: #2b6cb0;
+    --cru-accent-dark: #2c5282;
+    --cru-ink: #333;
+    --cru-muted: #718096;
+    --cru-line: #e2e8f0;
+    --cru-border: #cbd5e0;
+    --cru-surface: #ffffff;
+    --cru-surface-alt: #f7fafc;
+}
+
+/* ========== Base ========== */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5;
+    color: var(--cru-ink);
+    line-height: 1.5;
+}
+
+code {
+    color: var(--cru-accent-dark);
+}
+
+.text-primary {
+    color: var(--cru-accent) !important;
+}
+
+.text-muted,
+.text-secondary {
+    color: var(--cru-muted) !important;
+}
+
+/* ========== Navbar ========== */
+.navbar.bg-primary {
+    background: var(--cru-navy) !important;
+    padding: 12px 24px;
+}
+
+.navbar-brand {
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.navbar .btn-outline-light {
+    color: #bee3f8;
+    border-color: rgba(190, 227, 248, 0.45);
+    font-size: 13px;
+}
+
+.navbar .btn-outline-light:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: #bee3f8;
+    color: #ffffff;
+}
+
+/* ========== Cards as flat sections ========== */
+.card {
+    background: var(--cru-surface);
+    border: 1px solid var(--cru-line);
+    border-top: 1px solid var(--cru-line);
+    border-radius: 8px;
+}
+
+.card.shadow-sm {
+    box-shadow: none !important;
+}
+
+.card-body {
+    padding: 16px;
+}
+
+.card-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--cru-navy) !important;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--cru-line);
+}
+
+/* ========== Form elements ========== */
+.form-label {
+    font-size: 13px;
+    font-weight: 600 !important;
+    color: #555;
+    margin-bottom: 4px;
+}
+
+.form-text {
+    font-size: 13px;
+    color: var(--cru-muted);
+    line-height: 1.4;
+}
+
+.form-control,
+.form-select {
+    padding: 6px 10px;
+    border: 1px solid var(--cru-border);
+    border-radius: 4px;
+    font-size: 14px;
+    color: var(--cru-ink);
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--cru-accent);
+    box-shadow: 0 0 0 0.2rem rgba(43, 108, 176, 0.15);
+}
+
+.form-control[readonly],
+.form-control[disabled],
+.form-select:disabled {
+    background: var(--cru-surface-alt) !important;
+    color: #666;
+}
+
+.form-control-sm,
+.input-group-sm > .form-control {
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+.readonly-field {
+    background: var(--cru-surface-alt);
+    border-color: var(--cru-line);
+    border-radius: 4px;
+    color: var(--cru-muted);
+    font-size: 14px;
+}
+
+.form-check-input:checked {
+    background-color: var(--cru-accent);
+    border-color: var(--cru-accent);
+}
+
+.form-check-input:focus {
+    border-color: var(--cru-border);
+    box-shadow: 0 0 0 0.2rem rgba(43, 108, 176, 0.15);
+}
+
+.form-check-label {
+    font-size: 13px;
+    color: #555;
+}
+
+/* ========== Buttons ========== */
+.btn {
+    padding: 6px 14px;
+    border: 1px solid var(--cru-border);
+    border-radius: 4px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.btn-lg {
+    padding: 9px 20px;
+    font-size: 15px;
+}
+
+.input-group > .btn {
+    font-size: 14px;
+}
+
+.btn:disabled,
+.btn:disabled:hover {
+    opacity: 0.5;
+    background: #edf2f7;
+    color: var(--cru-muted);
+}
+
+.btn-primary {
+    background: var(--cru-accent);
+    border-color: var(--cru-accent);
+    color: #ffffff;
+}
+
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active {
+    background: var(--cru-accent-dark);
+    border-color: var(--cru-accent-dark);
+}
+
+.btn-secondary {
+    background: #e2e8f0;
+    border-color: var(--cru-border);
+    color: #4a5568;
+}
+
+.btn-secondary:hover,
+.btn-secondary:focus,
+.btn-secondary:active {
+    background: var(--cru-border);
+    border-color: var(--cru-border);
+    color: #2d3748;
+}
+
+.btn-success {
+    background: #38a169;
+    border-color: #38a169;
+}
+
+.btn-success:hover,
+.btn-success:focus,
+.btn-success:active {
+    background: #2f855a;
+    border-color: #2f855a;
+}
+
+.btn-outline-primary {
+    background: var(--cru-surface);
+    border-color: var(--cru-border);
+    color: var(--cru-accent);
+}
+
+.btn-outline-primary:hover,
+.btn-outline-primary:focus,
+.btn-outline-primary:active {
+    background: #ebf8ff;
+    border-color: var(--cru-accent);
+    color: var(--cru-accent-dark);
+}
+
+.btn-outline-secondary {
+    background: var(--cru-surface);
+    border-color: var(--cru-border);
+    color: #4a5568;
+}
+
+.btn-outline-secondary:hover,
+.btn-outline-secondary:focus,
+.btn-outline-secondary:active {
+    background: var(--cru-surface-alt);
+    border-color: var(--cru-border);
+    color: #2d3748;
+}
+
+.btn-outline-danger {
+    background: var(--cru-surface);
+    border-color: #feb2b2;
+    color: #c53030;
+}
+
+.btn-outline-danger:hover,
+.btn-outline-danger:focus,
+.btn-outline-danger:active {
+    background: #fff5f5;
+    border-color: #fc8181;
+    color: #742a2a;
+}
+
+/* ========== Segmented toggles (btn-group + btn-check) ========== */
+.btn-group .btn-check + .btn-outline-secondary {
+    background: var(--cru-surface-alt);
+    font-weight: 600;
+}
+
+.btn-check:checked + .btn-outline-secondary,
+.btn-check:active + .btn-outline-secondary {
+    background: var(--cru-accent);
+    border-color: var(--cru-accent);
+    color: #ffffff;
+}
+
+/* ========== Modals ========== */
+.modal-content {
+    border: none;
+    border-radius: 8px;
+}
+
+.modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--cru-line);
+}
+
+.modal-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--cru-navy);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--cru-line);
+}
+
+/* ========== Alerts ========== */
+.alert {
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.alert-success {
+    background: #c6f6d5;
+    border-color: #9ae6b4;
+    color: #22543d;
+}
+
+.alert-danger {
+    background: #fed7d7;
+    border-color: #feb2b2;
+    color: #742a2a;
+}
+
+.alert-warning {
+    background: #feebc8;
+    border-color: #fbd38d;
+    color: #7b341e;
+}
+
+.alert-info {
+    background: #bee3f8;
+    border-color: #90cdf4;
+    color: #2a4365;
+}
+
+/* ========== Badges ========== */
+.badge {
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.badge.bg-secondary,
+.badge.text-bg-secondary {
+    background: #e2e8f0 !important;
+    color: #4a5568 !important;
+}
+
+.badge.text-bg-warning {
+    background: #feebc8 !important;
+    color: #7b341e !important;
+}
+
+/* ========== List groups ========== */
+.list-group-item {
+    border-color: var(--cru-line);
+    font-size: 13px;
+}
+
+label.list-group-item:hover {
+    background: #edf2f7;
+}
+
+/* ========== Accordion ========== */
+.accordion-item {
+    border-color: var(--cru-line);
+}
+
+.accordion-button {
+    background: var(--cru-surface-alt);
+    font-size: 14px;
+    color: var(--cru-navy);
+}
+
+.accordion-button:not(.collapsed) {
+    background: #ebf8ff;
+    color: var(--cru-navy);
+    box-shadow: none;
+}
+
+.accordion-button:focus {
+    border-color: var(--cru-border);
+    box-shadow: none;
+}

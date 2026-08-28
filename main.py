@@ -3,7 +3,6 @@ Crucible Upload UI — Flask backend
 """
 import ast
 import importlib
-import json
 import logging
 import os
 import queue
@@ -44,7 +43,7 @@ def _check_browse_queue():
     Always returns a list of paths via _browse_result so the API has a uniform shape.
     """
     try:
-        mode = _browse_request.get_nowait()
+        _browse_request.get_nowait()
     except queue.Empty:
         _tk_root.after(50, _check_browse_queue)
         return
@@ -52,14 +51,7 @@ def _check_browse_queue():
         # Realize/flush the root so the dialog reliably comes to front on macOS,
         # where the first invocation otherwise returns empty.
         _tk_root.update()
-        if mode == "schema":
-            path = filedialog.askopenfilename(
-                master=_tk_root,
-                title="Select JSON Schema file",
-                filetypes=[("JSON Schema", "*.json"), ("All files", "*.*")],
-            )
-            paths = [path] if path else []
-        elif conf.IS_SESSION:
+        if conf.IS_SESSION:
             kwargs = {"master": _tk_root, "title": "Select session folder"}
             if conf.DEFAULT_BROWSE_DIR:
                 kwargs["initialdir"] = conf.DEFAULT_BROWSE_DIR
@@ -104,7 +96,6 @@ def get_instruments():
         "holder_layouts": registry.INSTRUMENT_HOLDER_LAYOUTS,
         "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
         "default_ingestors": registry.INSTRUMENT_INGESTORS,
-        "default_schemas": registry.INSTRUMENT_SCHEMAS,
         "instrument_session_modes": registry.INSTRUMENT_SESSION_MODES,
     })
 
@@ -121,13 +112,12 @@ def get_ingestors():
 
 @app.get("/api/browse")
 def browse():
-    mode = request.args.get("mode", "default")
     # One dialog at a time. Drain any leftover request/result from a prior call
     # (e.g. a dialog the user abandoned) so we never return a stale selection.
     with _browse_lock:
         _drain(_browse_request)
         _drain(_browse_result)
-        _browse_request.put(mode)
+        _browse_request.put(True)
         try:
             paths = _browse_result.get(timeout=300)
         except queue.Empty:
@@ -395,17 +385,8 @@ def do_preview():
     project_id = data["project_id"].strip()
     instrument_name = data["instrument_name"].strip()
     ingestor = (data.get("ingestor") or "").strip()
-    schema_path = (data.get("schema_path") or "").strip()
     comments = (data.get("comments") or "").strip()
     kw_list = data.get("keywords") or []
-
-    schema = {}
-    if schema_path:
-        try:
-            with open(schema_path) as f:
-                schema = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            return jsonify({"error": f"Could not read schema: {e}"}), 400
 
     # Nothing is written to Crucible here. The dsid is only resolved, not created — either
     # an existing record matched by SHA, or a fresh mfid that stays unused until the
@@ -455,15 +436,13 @@ def do_preview():
 
     packet.to_json(str(backend.preview_packet_path(dsid)))
 
-    fields = backend.build_form_descriptor(schema, packet.scientific_metadata)
     return jsonify({
         "dsid": dsid,
         "reused_dataset": reused,
         "packet": backend.preview_view(packet),
-        "fields": fields,
+        "fields": backend.build_form_descriptor(packet.scientific_metadata),
         "dataset_fields": backend.build_dataset_form_descriptor(packet.dataset_fields),
         "other_dataset_fields": backend.other_dataset_fields(packet.dataset_fields),
-        "unmapped": backend.unmapped_metadata(fields, packet.scientific_metadata),
         "collisions": collisions,
         "requested_ingestor": ingestor,
         "actual_ingestor": packet.ingestion_class,

@@ -1,7 +1,6 @@
 NAME = 'gc-b30-001'
 INGESTOR = ''
 UI_MODE = 'preview'
-DEFAULT_SCHEMA = '/Users/mkwall/Git/crucible-main/schema.json'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
 FLOW = None

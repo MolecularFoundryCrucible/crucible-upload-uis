@@ -1,7 +1,6 @@
 NAME = 'insitu_pl'
 INGESTOR = ''
 UI_MODE = 'standard'
-DEFAULT_SCHEMA = ''
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
 FLOW = None

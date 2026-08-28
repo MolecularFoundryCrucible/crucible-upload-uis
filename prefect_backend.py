@@ -3,6 +3,7 @@ Backend functions for the Crucible upload UI.
 Replace these stubs with your real implementations.
 """
 import json
+import math
 import os
 import re
 import tempfile
@@ -379,6 +380,67 @@ def create_dataset(files: list[str],
     return new_ds_dsid
 
 
+def dataset_exists(dsid: str) -> bool:
+    try:
+        return bool(client.datasets.get(dsid))
+    except Exception:
+        return False
+
+
+@task
+def update_dataset(files: list[str],
+                   dsid: str,
+                   instrument_name: str | None = None,
+                   project_id: str | None = None,
+                   orcid: str | None = None,
+                   session_name: str | None = None,
+                   kw_list: list[str] | None = None,
+                   comments: str | None = None,
+                   ingestor: str | None = None,
+                   dataset_name: str | None = None,
+                   measurement: str | None = None,
+                   data_type: str | None = None,
+                   scientific_metadata: dict | None = None,
+                   wait_for_ingestion: bool = False) -> str:
+    logger = get_run_logger()
+
+    # Ownership, project and instrument belong to the record that already exists; the form
+    # only says where this upload came from, so it must not reassign them.
+    existing = client.datasets.get(dsid)
+    for field, value in (('owner_orcid', orcid),
+                         ('project_id', project_id),
+                         ('instrument_name', instrument_name)):
+        if value and existing.get(field) and existing[field] != value:
+            logger.warning(f"{dsid} has {field}={existing[field]!r}; leaving it as is "
+                           f"rather than overwriting with {value!r}")
+
+    updates = {k: v for k, v in dict(
+        session_name=session_name,
+        dataset_name=dataset_name,
+        measurement=measurement,
+        data_type=data_type,
+    ).items() if v is not None}
+    if updates:
+        client.datasets.update(dsid, **updates)
+
+    scimd = dict(scientific_metadata or {})
+    if comments:
+        scimd['comments'] = comments
+    if scimd:
+        client.datasets.update_scientific_metadata(dsid, scimd)
+
+    for kw in kw_list or []:
+        client.datasets.add_keyword(dsid, kw)
+
+    for path in files:
+        client.datasets.add_file(dsid, path,
+                                 ingestion_class=ingestor or None,
+                                 wait_for_ingestion_response=wait_for_ingestion)
+
+    logger.info(f"Updated existing dataset {dsid} with {', '.join(Path(f).name for f in files)}")
+    return dsid
+
+
 @task(retries=3, retry_delay_seconds=5)
 def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
     if session_dsid is not None:
@@ -413,7 +475,6 @@ def list_ingestors() -> list[str]:
 _PREVIEW_DIR = Path(tempfile.gettempdir()) / 'crucible_preview_packets'
 _DSID_RE = re.compile(r'^[0-9a-z]{26}$')
 _PREVIEW_MAX_AGE_S = 24 * 3600
-_SCALAR_TYPES = {'string', 'number', 'integer', 'boolean'}
 
 
 def preview_packet_path(dsid: str) -> Path:
@@ -457,9 +518,28 @@ def _is_empty(value) -> bool:
     return value is None or value == '' or value == [] or value == {}
 
 
-def _fill_gaps(base: dict, incoming: dict, collisions: list, path: str = '') -> dict:
+SUMMED_DATASET_FIELDS = frozenset({'size'})
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _sum_fields(base: dict, incoming: dict, keys) -> None:
+    for key in keys:
+        value = incoming.get(key)
+        if not _is_number(value):
+            continue
+        running = base.get(key)
+        base[key] = (running if _is_number(running) else 0) + value
+
+
+def _fill_gaps(base: dict, incoming: dict, collisions: list, path: str = '',
+               skip=frozenset()) -> dict:
     for key, value in incoming.items():
         here = f'{path}.{key}' if path else key
+        if key in skip:
+            continue
         if key not in base or _is_empty(base[key]):
             base[key] = value
         elif isinstance(base[key], dict) and isinstance(value, dict):
@@ -492,10 +572,13 @@ def _dedup_by(items: list, key) -> list:
 
 def fold_into_packet(packet, parsed, collisions: list, source: str = ''):
     """Update the running packet with everything the next file contributed. Values
-    already extracted are kept; a differing value that gets dropped is reported."""
+    already extracted are kept; a differing value that gets dropped is reported. Size is
+    the exception: it is per-file bytes, so it accumulates instead of being kept."""
     found: list[dict] = []
     _fill_gaps(packet.scientific_metadata, parsed.scientific_metadata, found)
-    _fill_gaps(packet.dataset_fields, parsed.dataset_fields, found)
+    _fill_gaps(packet.dataset_fields, parsed.dataset_fields, found,
+               skip=SUMMED_DATASET_FIELDS)
+    _sum_fields(packet.dataset_fields, parsed.dataset_fields, SUMMED_DATASET_FIELDS)
     for c in found:
         c['file'] = source
     collisions.extend(found)
@@ -555,82 +638,75 @@ def parse_for_preview(files: list[str], dsid: str,
     return packet, collisions, per_file, skipped
 
 
-def _value_at(data: dict, path: list[str]):
-    cur = data
-    for part in path:
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
-
-
 # size is measured from the file and parse_provenance is a record of what the machine did,
 # so an operator's value for either would only ever be wrong.
 LOCKED_FIELDS = {'size', 'parse_provenance'}
+HIDDEN_FIELDS = {'parse_provenance'}
+
+_MISSING_STRINGS = {'na', 'nan', 'unknown'}
 
 
-def _resolve_ref(spec: dict, root: dict) -> dict:
-    """Follow local $ref pointers so a referenced subschema is walked like an inline one.
-    Remote and cyclic refs are left unresolved."""
-    seen: set[str] = set()
-    while isinstance(spec, dict) and '$ref' in spec:
-        ref = spec['$ref']
-        if not isinstance(ref, str) or not ref.startswith('#/') or ref in seen:
-            return spec
-        seen.add(ref)
-        target = root
-        for part in ref[2:].split('/'):
-            part = part.replace('~1', '/').replace('~0', '~')
-            if not isinstance(target, dict) or part not in target:
-                return spec
-            target = target[part]
-        if not isinstance(target, dict):
-            return spec
-        spec = {**target, **{k: v for k, v in spec.items() if k != '$ref'}}
-    return spec
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped == '' or stripped.lower() in _MISSING_STRINGS
+    return False
 
 
-def build_form_descriptor(schema: dict, scientific_metadata: dict) -> list[dict]:
-    """Flatten a JSON Schema into form fields, each prefilled from the parsed metadata.
-    Scalars, enums and arrays of scalars are editable; arrays of objects are shown
-    read-only."""
+def _field_type(value) -> tuple[str, str | None, bool]:
+    """Infer an input type from a parsed value: (type, items_type, editable)."""
+    if isinstance(value, bool):
+        return 'boolean', None, True
+    if isinstance(value, int):
+        return 'integer', None, True
+    if isinstance(value, float):
+        return 'number', None, True
+    if value is None or isinstance(value, str):
+        return 'string', None, True
+    if isinstance(value, list):
+        if any(isinstance(v, (dict, list)) for v in value):
+            return 'json', None, False
+        first = next((v for v in value if v is not None), None)
+        items_type = 'string' if first is None else _field_type(first)[0]
+        return 'array', items_type, True
+    return 'json', None, False
+
+
+def build_form_descriptor(scientific_metadata: dict) -> list[dict]:
+    """Turn parsed metadata into form fields, one per key, in parse order. Nested dicts
+    become groups the browser renders as collapsible sections. Values with no sensible
+    input — lists of objects, empty dicts — are shown read-only."""
     fields: list[dict] = []
-    root = schema or {}
 
-    def walk(node: dict, path: list[str], group_labels: list[str]):
-        props = node.get('properties') or {}
-        for name, spec in props.items():
-            spec = _resolve_ref(spec or {}, root)
+    def walk(node: dict, path: list[str]):
+        for name, value in node.items():
             here = path + [name]
-            stype = spec.get('type')
-            if stype == 'object' or 'properties' in spec:
-                walk(spec, here, group_labels + [spec.get('title') or name])
+            if len(here) == 1 and name in HIDDEN_FIELDS:
                 continue
-            enum = spec.get('enum')
-            items_type = (spec.get('items') or {}).get('type') if stype == 'array' else None
-            value = _value_at(scientific_metadata, here)
-            locked = here[0] in LOCKED_FIELDS
+            if isinstance(value, dict) and value:
+                walk(value, here)
+                continue
+            ftype, items_type, editable = _field_type(value)
             fields.append({
                 'path': here,
                 'key': '.'.join(here),
-                'label': spec.get('title') or name,
-                'group_labels': group_labels,
-                'description': spec.get('description') or '',
-                'type': stype or ('string' if enum else 'unknown'),
+                'label': name,
+                'group_labels': path,
+                'description': '',
+                'type': ftype,
                 'items_type': items_type,
-                'enum': enum,
+                'enum': None,
                 'value': value,
-                'editable': not locked and (bool(enum) or stype in _SCALAR_TYPES
-                                            or items_type in _SCALAR_TYPES),
+                'editable': editable and here[0] not in LOCKED_FIELDS,
+                'missing': _is_missing(value),
             })
 
-    walk(_resolve_ref(root, root), [], [])
+    walk(scientific_metadata or {}, [])
     return fields
-
-
-def unmapped_metadata(fields: list[dict], scientific_metadata: dict) -> dict:
-    covered = {f['path'][0] for f in fields}
-    return {k: v for k, v in (scientific_metadata or {}).items() if k not in covered}
 
 
 DATASET_FORM_FIELDS = [
@@ -660,6 +736,7 @@ def build_dataset_form_descriptor(dataset_fields: dict) -> list[dict]:
         'enum': None,
         'value': values.get(spec['key']),
         'editable': True,
+        'missing': _is_missing(values.get(spec['key'])),
     } for spec in DATASET_FORM_FIELDS]
 
 
@@ -1122,11 +1199,11 @@ def parent_child_upload(file: str,
 
 
 # Upload path for datasets the operator previewed and corrected locally. Preview wrote
-# nothing to Crucible, so this is where the record first appears — the only thing that
-# already exists is the reviewed packet on disk.
+# nothing to Crucible, so unless the file's SHA matched a dataset that already exists,
+# this is where the record first appears.
 #
-# datasets.create() creates the record, PATCH-merges the scientific metadata, and only
-# then calls add_file() per file. add_file() requests server-side ingestion, so the
+# datasets.create() (or datasets.update() when the record already exists) writes the
+# record, PATCH-merges the scientific metadata, and only then calls add_file() per file. add_file() requests server-side ingestion, so the
 # ingestors run again on the server. That redundancy is deliberate: it records the
 # ingestion code git hash and ingestor class on each ingestion request, and the re-parse
 # merges beneath the operator's values rather than over them. The jobs are left to run
@@ -1148,12 +1225,11 @@ def preview_upload(files: list[str],
     ds_fields = packet.dataset_fields or {}
     named = {k: (ds_fields.get(k) or None) for k in DATASET_FORM_KEYS}
 
-    create_dataset(
+    common = dict(
         files=files,
         instrument_name=instrument_name,
         project_id=project_id,
         orcid=orcid,
-        dsid=dsid,
         kw_list=list(packet.keywords or []),
         comments=comments,
         ingestor=ingestor or packet.ingestion_class,
@@ -1164,6 +1240,10 @@ def preview_upload(files: list[str],
         session_name=named['session_name'],
         wait_for_ingestion=False,
     )
+    if dataset_exists(dsid):
+        update_dataset(dsid=dsid, **common)
+    else:
+        create_dataset(dsid=dsid, **common)
 
     link_dataset_and_sample(dsid, sample_unique_id)
     link_dataset_to_session(dsid, session_dsid)

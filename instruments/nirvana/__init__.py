@@ -3,7 +3,6 @@ import h5py
 NAME = 'nirvana'
 INGESTOR = 'NirvanaMultiPosLineScanIngestor'
 UI_MODE = 'multi_assignment'
-DEFAULT_SCHEMA = ''
 HOLDER_LAYOUTS = {
     'Tray 2×8': [
         {'label': 'Tray A', 'slots': 8},

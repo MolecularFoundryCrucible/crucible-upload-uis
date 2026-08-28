@@ -51,6 +51,8 @@
   window._instrumentPanelClearers = window._instrumentPanelClearers || {};
   window._instrumentPanelParsers  = window._instrumentPanelParsers  || {};
 
+  const MFID_RE = /^[0-9a-hjkmnp-tv-z]{26}$/i;
+
   let _pb = {
     carrierUuid: '', carrierName: '', pendingNewCarrier: false,
     tray1Uuid: '', tray2Uuid: '',
@@ -95,12 +97,13 @@
     const query = document.getElementById('pb-carrier-uuid').value.trim();
     if (!query) { showStatus('Enter a carrier UUID or name.', 'warning'); return; }
     const project_id = document.getElementById('project').value;
+    const lookup = MFID_RE.test(query) ? {sample_unique_id: query} : {sample_name: query};
     document.getElementById('pb-spinner').classList.remove('d-none');
     try {
       const res = await fetch('/api/sample/lookup', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({query, project_id}),
+        body: JSON.stringify({...lookup, project_id}),
       });
       const data = await res.json();
       if (!res.ok) { showStatus(data.error || 'Carrier lookup failed.', 'danger'); return; }
@@ -193,9 +196,7 @@
         });
         const cd = await cr.json();
         if (!cr.ok) {
-          document.getElementById('submitting-section').classList.add('d-none');
-          document.getElementById('upload-modal-title').textContent = 'Upload Failed';
-          document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+          showUploadError(cd.error || 'Failed to create carrier.');
           return;
         }
         _pb.carrierUuid = cd.unique_id;
@@ -220,23 +221,13 @@
         }),
       });
       const data = await res.json();
-      document.getElementById('submitting-section').classList.add('d-none');
       if (res.ok) {
-        document.getElementById('upload-modal-title').textContent = 'Upload running';
-        document.getElementById('upload-modal-header').classList.add('bg-success', 'text-white');
-        document.getElementById('success-section').classList.remove('d-none');
-        document.getElementById('prefect-link').href =
-          'http://127.0.0.1:4200/flow-runs/flow-run/' + data.flow_run_id;
-        document.getElementById('crucible-link').href =
-          `https://crucible.lbl.gov/explore/${data.project_id}/#tab=datasets`;
+        showUploadSuccess('Upload running', data);
       } else {
-        document.getElementById('upload-modal-title').textContent = 'Upload Failed';
-        document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+        showUploadError(data.error);
       }
     } catch (e) {
-      document.getElementById('submitting-section').classList.add('d-none');
-      document.getElementById('upload-modal-title').textContent = 'Upload Failed';
-      document.getElementById('upload-modal-header').classList.add('bg-danger', 'text-white');
+      showUploadError('Upload error: ' + e.message);
     } finally {
       btn.disabled = false;
     }

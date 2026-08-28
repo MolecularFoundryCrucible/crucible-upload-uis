@@ -30,19 +30,6 @@ def make_image(qr, text_lines, save_path, image_size = imsize, font_size = font_
     image.save(save_path)
 
 
-def make_nirvana_image(qr, text_lines, save_path, image_size = imsize, font_size = font_size, background_color = bkgd_color, text_color = text_color):
-    image = Image.new('RGB', image_size, background_color)
-    Image.Image.paste(image, qr,(5,1))
-    draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype("arialbd.ttf", font_size) 
-    y = 85
-    for l in text_lines:
-        draw.text((2, y), l, font=font, fill=text_color)
-        y += font_size +5
-
-    image.save(save_path)
-    
-    
 def print_label(printer_name, image_file, image_size = imsize):
 
     hDC = win32ui.CreateDC()

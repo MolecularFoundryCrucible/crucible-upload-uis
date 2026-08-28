@@ -18,3 +18,7 @@ dependencies = [
 
 [tool.uv.sources]
 crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

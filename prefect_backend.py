@@ -27,7 +27,7 @@ class MultipleSessionsFound(Exception):
 
 
 try:
-    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v2')
+    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/testapi-staging')
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 
@@ -144,7 +144,7 @@ def create_sample(sample_name: str,
         "timestamp": timestamp,
         "project_id": project_id,
         "sample_type": sample_type,
-        "owner_user_id": owner_orcid,
+        "owner_orcid": owner_orcid,
     }.items() if v is not None}
 
     result = client.samples.create(**kwargs)

@@ -144,7 +144,7 @@ def create_sample(sample_name: str,
         "timestamp": timestamp,
         "project_id": project_id,
         "sample_type": sample_type,
-        "owner_user_id": owner_orcid,
+        "owner_orcid": owner_orcid,
     }.items() if v is not None}
 
     result = client.samples.create(**kwargs)

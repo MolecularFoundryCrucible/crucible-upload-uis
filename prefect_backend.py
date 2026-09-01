@@ -172,6 +172,12 @@ def get_emi_file_name(serfile: str) -> str:
     no_rep = re.sub('_[0-9]*$', '', no_ext)
     return f"{no_rep}.emi"
 
+def instrument_id_from_name(instrument_name: str | None) -> str | None:
+    if not instrument_name:
+        return None
+    return re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
+
+
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
     if len(parts) - 1 < min_depth:  # subtract 1 to not count the root
@@ -207,7 +213,7 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
         session_ds = BaseDataset(dataset_name=dsname,
                                 owner_orcid=orcid,
                                 project_id=project_id,
-                                instrument_name=instrument_name,
+                                instrument_id=instrument_id_from_name(instrument_name),
                                 measurement=f'full {instrument_name} session',
                                 session_name=session_name)
 
@@ -338,7 +344,7 @@ def create_dataset(files: list[str],
         unique_id=dsid,
         owner_orcid=orcid,
         project_id=project_id,
-        instrument_name=instrument_name,
+        instrument_id=instrument_id_from_name(instrument_name),
         session_name=session_name,
         dataset_name=dataset_name,
         measurement=measurement,
@@ -409,7 +415,7 @@ def update_dataset(files: list[str],
     existing = client.datasets.get(dsid)
     for field, value in (('owner_orcid', orcid),
                          ('project_id', project_id),
-                         ('instrument_name', instrument_name)):
+                         ('instrument_id', instrument_id_from_name(instrument_name))):
         if value and existing.get(field) and existing[field] != value:
             logger.warning(f"{dsid} has {field}={existing[field]!r}; leaving it as is "
                            f"rather than overwriting with {value!r}")

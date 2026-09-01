@@ -1148,9 +1148,9 @@ def photobox_upload(file: str,
                               measurement="thin film carrier image",
                               sample_positions=sample_positions or {})
 
-    all_uuids = [carrier_uuid] + [u for u in sample_uuids if u]
-    link_dataset_and_sample(new_dsid, all_uuids)
-    logger.info(f"Linked dataset {new_dsid} to carrier + {len(sample_uuids)} thin films")
+    tray_uuids = [t for t in [tray1_uuid, tray2_uuid] if t]
+    link_dataset_and_sample(new_dsid, [carrier_uuid] + tray_uuids)
+    logger.info(f"Linked dataset {new_dsid} to carrier + {len(tray_uuids)} trays")
 
     _run_post_processing(instrument_name, new_dsid)
 

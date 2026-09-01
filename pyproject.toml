@@ -16,9 +16,9 @@ dependencies = [
     "qrcode>=8.2",
 ]
 
-[tool.uv.sources]
-crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }
-
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }

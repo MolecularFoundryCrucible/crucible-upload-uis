@@ -478,7 +478,7 @@ requires-dist = [
     { name = "crucible-ingestion", git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" },
     { name = "flask", specifier = ">=3.0" },
     { name = "h5py", specifier = ">=3.0" },
-    { name = "nano-crucible", specifier = "==3.1" },
+    { name = "nano-crucible", specifier = ">=3.1.0" },
     { name = "pillow", specifier = ">=12.1.1" },
     { name = "prefect", specifier = ">=3.6.25" },
     { name = "pytest", specifier = ">=9.0.3" },

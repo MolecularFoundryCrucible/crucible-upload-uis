@@ -14,7 +14,6 @@ from tkinter import filedialog
 from flask import Flask, jsonify, render_template, request
 
 import crucible
-from crucible.utils.io import get_tz_isoformat
 import prefect_backend as backend
 import instrument_conf as conf
 from instruments import registry
@@ -369,17 +368,22 @@ def session_check():
 
 @app.post("/api/preview")
 def do_preview():
-    """Parse locally and hand back what was extracted, so the operator can correct it
-    before anything is pushed. Read-only as far as Crucible is concerned."""
+    """Parse one file and hand back the packet that would be pushed for it, so the
+    operator can see it before anything is written. Read-only as far as Crucible is
+    concerned.
+
+    One file per call. Files uploaded together as one dataset are previewed and pushed one
+    at a time against a shared dsid, so each parse reads back what the previous push
+    stored and the preview grows into the merged record."""
     data = request.json or {}
     required = ["orcid", "project_id", "instrument_name"]
     missing = [f for f in required if not (data.get(f) or "").strip()]
     if missing:
         return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
-    files = [p for p in (data.get("files") or []) if p]
-    if not files:
-        return jsonify({"error": "Missing field: files"}), 400
+    file_path = (data.get("file") or "").strip()
+    if not file_path:
+        return jsonify({"error": "Missing field: file"}), 400
 
     orcid = data["orcid"].strip()
     project_id = data["project_id"].strip()
@@ -387,42 +391,28 @@ def do_preview():
     ingestor = (data.get("ingestor") or "").strip()
     comments = (data.get("comments") or "").strip()
     kw_list = data.get("keywords") or []
+    pinned_dsid = (data.get("dsid") or "").strip()
 
-    # Nothing is written to Crucible here. The dsid is only resolved, not created — either
-    # an existing record matched by SHA, or a fresh mfid that stays unused until the
-    # operator confirms. parse() tolerates a dsid with no record behind it: it 404s
-    # internally and simply contributes no pre-existing values. That keeps an abandoned
-    # preview from leaving a stale empty dataset.
+    # Nothing is written to Crucible here. A pinned dsid means an earlier file of this
+    # dataset has already been pushed, so parse() reads that record back and the packet
+    # comes out merged. Without one the dsid is only resolved, not created — either an
+    # existing record matched by SHA, or a fresh mfid that stays unused until the operator
+    # sends it, so an abandoned preview leaves no stale empty dataset.
     try:
-        valid = backend.existing_dsids(orcid, project_id)
-        dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
-        packet, collisions, parsed_by, skipped = backend.parse_for_preview(files, dsid, ingestor)
+        if pinned_dsid:
+            dsid, reused = pinned_dsid, True
+        else:
+            valid = backend.existing_dsids(orcid, project_id)
+            dsid, reused = backend.resolve_dsid_for_file(file_path, valid)
+        packet, parsed = backend.parse_one_file(file_path, dsid, ingestor)
     except Exception as e:
         backend.logger.exception("preview failed")
         return jsonify({"error": str(e)}), 400
 
-    # Server-side ingestion records its githash and class on the IngestionRequest rather
-    # than the dataset, so a locally parsed and hand-corrected record would otherwise carry
-    # no trace of how it was produced. Recorded per file because a named ingestor that does
-    # not support a file is silently swapped for an auto-detected one.
-    provenance = {
-        "parsed_locally": True,
-        "parsed_at": get_tz_isoformat(),
-        "reviewed_by": orcid,
-        "files": parsed_by,
-    }
-    githash = backend.ingestion_githash()
-    if githash:
-        provenance["ingestion_githash"] = githash
-    if ingestor:
-        provenance["requested_ingestion_class"] = ingestor
-    if skipped:
-        provenance["unparsed_files"] = skipped
-    packet.scientific_metadata["parse_provenance"] = provenance
-
-    # With no record behind the dsid, parse() has no project/owner/instrument to read
-    # back, so fill them from the form. These are what create_dataset will use at upload
-    # time; showing them now keeps the preview an honest picture of the finished record.
+    # Until the first push there is no record behind the dsid for parse() to read
+    # project/owner/instrument back from, so fill them from the form. These are what
+    # ensure_dataset_record will create with, so showing them keeps the preview an honest
+    # picture of the finished record.
     for field, value in (("project_id", project_id),
                          ("owner_orcid", orcid),
                          ("instrument_name", instrument_name)):
@@ -438,16 +428,13 @@ def do_preview():
 
     return jsonify({
         "dsid": dsid,
-        "reused_dataset": reused,
+        "reused_dataset": reused and not pinned_dsid,
         "packet": backend.preview_view(packet),
-        "fields": backend.build_form_descriptor(packet.scientific_metadata),
-        "dataset_fields": backend.build_dataset_form_descriptor(packet.dataset_fields),
         "other_dataset_fields": backend.other_dataset_fields(packet.dataset_fields),
-        "collisions": collisions,
         "requested_ingestor": ingestor,
         "actual_ingestor": packet.ingestion_class,
-        "skipped": skipped,
-        "files": [os.path.basename(p) for p in files],
+        "parsed": parsed,
+        "file": os.path.basename(file_path),
     })
 
 
@@ -461,6 +448,87 @@ def cancel_preview():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"ok": True})
+
+
+@app.post("/api/preview/push")
+def push_preview():
+    """Send the previewed packet exactly as shown. Preview is read-only, so there is
+    nothing to apply on top of it — the packet on disk is what gets pushed, along with its
+    one file."""
+    data = request.json or {}
+    dsid = (data.get("dsid") or "").strip()
+    if not dsid:
+        return jsonify({"error": "Missing field: dsid"}), 400
+
+    from prefect.deployments import run_deployment
+    try:
+        flow_run = run_deployment(
+            "push-preview-file/push-preview-file",
+            parameters={
+                "dsid": dsid,
+                "instrument_name": (data.get("instrument_name") or "").strip(),
+                "project_id": (data.get("project_id") or "").strip(),
+                "orcid": (data.get("orcid") or "").strip(),
+                "sample_unique_id": data.get("sample_unique_id"),
+                "session_dsid": data.get("session_dsid"),
+                "finalize": bool(data.get("finalize", True)),
+            },
+            timeout=0,
+        )
+        return jsonify({
+            "flow_run_id": str(flow_run.id),
+            "project_id": (data.get("project_id") or "").strip(),
+            "dsid": dsid,
+        })
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/flow_status")
+def flow_status():
+    """Whether a run has finished. The preview queue waits on this: the next file is not
+    parsed until the previous push has landed, because that push is what it reads back."""
+    flow_run_id = (request.args.get("flow_run_id") or "").strip()
+    if not flow_run_id:
+        return jsonify({"error": "Missing field: flow_run_id"}), 400
+    try:
+        return jsonify(backend.flow_status(flow_run_id))
+    except Exception as e:
+        backend.logger.error(e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/review/form")
+def review_form():
+    """The record as stored once every file has been pushed, shaped as a form so the
+    operator can fill in what no file supplied."""
+    dsid = (request.args.get("dsid") or "").strip()
+    if not dsid:
+        return jsonify({"error": "Missing field: dsid"}), 400
+    try:
+        return jsonify(backend.review_view(dsid))
+    except Exception as e:
+        backend.logger.exception("review form failed")
+        return jsonify({"error": str(e)}), 400
+
+
+@app.post("/api/review/apply")
+def review_apply():
+    """Apply the operator's corrections. PATCH, so a value can be corrected but a key
+    cannot be removed."""
+    data = request.json or {}
+    dsid = (data.get("dsid") or "").strip()
+    if not dsid:
+        return jsonify({"error": "Missing field: dsid"}), 400
+    try:
+        backend.apply_review_edits(dsid,
+                                   data.get("metadata_edits") or {},
+                                   data.get("dataset_field_edits") or {})
+    except Exception as e:
+        backend.logger.exception("review apply failed")
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "dsid": dsid})
 
 
 @app.post("/api/upload")
@@ -493,44 +561,6 @@ def do_upload():
             return jsonify({"error": "Missing field: session_folder_paths"}), 400
 
     from prefect.deployments import run_deployment
-
-    # Reviewed-preview upload. The record and the parsed packet already exist; apply the
-    # operator's corrections and hand the flow the dsid. The flow writes the corrected
-    # metadata before attaching the files, so the server-side ingestion it triggers merges
-    # into the operator's values rather than replacing them.
-    preview_dsid = (data.get("preview_dsid") or "").strip()
-    if preview_dsid:
-        try:
-            packet = backend.load_preview_packet(preview_dsid)
-            backend.apply_metadata_edits(packet, data.get("metadata_edits") or {})
-            backend.apply_dataset_field_edits(packet, data.get("dataset_field_edits") or {})
-            packet.to_json(str(backend.preview_packet_path(preview_dsid)))
-        except (ValueError, OSError) as e:
-            return jsonify({"error": f"Preview expired or invalid: {e}"}), 400
-        try:
-            flow_run = run_deployment(
-                "preview-upload/preview-upload",
-                parameters={
-                    "files": session_folder_paths,
-                    "dsid": preview_dsid,
-                    "instrument_name": instrument_name,
-                    "project_id": project_id,
-                    "orcid": orcid,
-                    "sample_unique_id": sample_unique_id,
-                    "session_dsid": session_dsid,
-                    "ingestor": ingestor,
-                    "comments": comments,
-                },
-                timeout=0,
-            )
-            return jsonify({
-                "flow_run_id": str(flow_run.id),
-                "project_id": project_id,
-                "dsid": preview_dsid,
-            })
-        except Exception as e:
-            backend.logger.error(e)
-            return jsonify({"error": str(e)}), 500
 
     if is_session:
         # Session mode — existing behavior. Create parent session record sync so

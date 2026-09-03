@@ -511,12 +511,12 @@
     </div>
   </div>
 
-  <!-- Preview & Correct Modal -->
+  <!-- Preview (read-only, before push) and Review (editable, after push) share this modal -->
   <div class="modal fade" id="preview-modal" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered modal-xl modal-dialog-scrollable">
       <div class="modal-content">
         <div class="modal-header">
-          <h5 class="modal-title">Review extracted metadata</h5>
+          <h5 class="modal-title" id="preview-title">Preview upload</h5>
           <button type="button" class="btn-close" onclick="cancelPreview()"></button>
         </div>
         <div class="modal-body">
@@ -534,9 +534,9 @@
             <div class="d-flex justify-content-between align-items-start">
               <div>
                 <h6 class="form-section-title">Scientific metadata</h6>
-                <p class="form-section-hint">Values read from your files. Correct anything that is wrong.</p>
+                <p class="form-section-hint" id="preview-md-hint">Values read from this file.</p>
               </div>
-              <div class="form-check form-switch">
+              <div class="form-check form-switch d-none" id="preview-edit-filter">
                 <input class="form-check-input" type="checkbox" id="preview-missing-only"
                        onchange="applyMissingFilter()" />
                 <label class="form-check-label small" for="preview-missing-only">Show only missing</label>
@@ -544,23 +544,25 @@
             </div>
             <div id="preview-fields"></div>
 
-            <div id="preview-added-fields" class="mt-2"></div>
-            <button class="btn btn-sm btn-outline-secondary mt-2" type="button" onclick="addPreviewField()">
-              + Add field
-            </button>
-            <div class="form-text">
-              Values are read as JSON, so <code>2</code> is saved as a number and <code>abc</code> as text.
-              Wrap a value in quotes — <code>"0012"</code> — to keep it text.
+            <div id="preview-edit-add" class="d-none">
+              <div id="preview-added-fields" class="mt-2"></div>
+              <button class="btn btn-sm btn-outline-secondary mt-2" type="button" onclick="addPreviewField()">
+                + Add field
+              </button>
+              <div class="form-text">
+                Values are read as JSON, so <code>2</code> is saved as a number and <code>abc</code> as text.
+                Wrap a value in quotes — <code>"0012"</code> — to keep it text.
+              </div>
             </div>
           </section>
 
           <div class="accordion mt-3" id="preview-extra"></div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" onclick="cancelPreview()">Cancel</button>
+          <button type="button" class="btn btn-secondary" id="btn-preview-cancel" onclick="cancelPreview()">Cancel</button>
           <button type="button" class="btn btn-primary" id="btn-preview-confirm" onclick="confirmPreview()">
             <span id="spinner-preview-confirm" class="spinner-border spinner-border-sm d-none me-2" role="status"></span>
-            Upload
+            <span id="btn-preview-confirm-label">Send</span>
           </button>
         </div>
       </div>
@@ -1115,6 +1117,10 @@
         comments: document.getElementById("comments").value.trim(),
         keywords: getKeywords(),
       };
+      // Review offers a correction form once everything has landed, so it only makes
+      // sense when the selection becomes a single dataset.
+      const isReview = state.uiModes[instrument_name] === 'review' && !state.isSession;
+
       if (state.isSession) {
         uploadParams.session_folder_path = state.selectedPaths[0];
       } else {
@@ -1123,8 +1129,13 @@
         if (state.selectedPaths.length > 1) {
           askGrouping(asOne => {
             uploadParams.group_as_one = asOne;
-            startUploadRequest(uploadParams);
+            if (isReview && asOne) startReviewRequest(uploadParams);
+            else startUploadRequest(uploadParams);
           });
+          return;
+        }
+        if (isReview) {
+          startReviewRequest(uploadParams);
           return;
         }
       }
@@ -1169,14 +1180,19 @@
     }
 
     // ── Preview upload ───────────────────────────────────────────────────────
-    // Files are parsed locally and shown for correction before anything is pushed.
-    // Several files can be previewed as one dataset or one at a time; either way the
-    // queue below drives one modal per resulting dataset.
+    // One file at a time: parse it, show what would be written, push it, then parse the
+    // next. Files sent as one dataset share a dsid, so each parse reads back what the
+    // previous push stored and the preview grows into the merged record. The queue is
+    // therefore two-level — groups of files, and files within a group.
     let previewModal = null;
-    let _previewQueue = [];
-    let _previewIndex = 0;
+    let _previewGroups = [];
+    let _groupIndex = 0;
+    let _fileIndex = 0;
+    let _groupDsid = null;
     let _previewCurrent = null;
     let _previewParams = null;
+    let _reviewMode = false;
+    let _reviewData = null;
 
     function _previewValidate() {
       const missing = [];
@@ -1211,8 +1227,11 @@
     }
 
     async function _startPreviewQueue(groups) {
-      _previewQueue = groups;
-      _previewIndex = 0;
+      _previewGroups = groups;
+      _groupIndex = 0;
+      _fileIndex = 0;
+      _groupDsid = null;
+      _reviewMode = false;
       await _runPreviewStep();
     }
 
@@ -1223,7 +1242,11 @@
         const res = await fetch("/api/preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ..._previewParams, files: _previewQueue[_previewIndex] }),
+          body: JSON.stringify({
+            ..._previewParams,
+            file: _previewGroups[_groupIndex][_fileIndex],
+            dsid: _groupDsid,
+          }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -1231,17 +1254,42 @@
           return;
         }
         _previewCurrent = data;
+        _groupDsid = data.dsid;
         renderPreview(data);
-        if (!previewModal) {
-          previewModal = new bootstrap.Modal(document.getElementById("preview-modal"));
-        }
-        previewModal.show();
+        _showPreviewModal();
       } catch (e) {
         showStatus("Preview failed: " + e.message, "danger");
       } finally {
         setSpinner("preview", false);
         document.getElementById("btn-preview").disabled = false;
       }
+    }
+
+    function _showPreviewModal() {
+      if (!previewModal) {
+        previewModal = new bootstrap.Modal(document.getElementById("preview-modal"));
+      }
+      previewModal.show();
+    }
+
+    // run_deployment is fire-and-forget, but file N+1 must not be parsed until push N has
+    // landed — that push is what the next parse reads back.
+    async function _awaitFlow(flowRunId, onTick) {
+      if (!flowRunId) return true;
+      for (let i = 0; i < 1600; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        let data;
+        try {
+          const res = await fetch(`/api/flow_status?flow_run_id=${encodeURIComponent(flowRunId)}`);
+          data = await res.json();
+          if (!res.ok) continue;
+        } catch {
+          continue;
+        }
+        if (onTick) onTick(data.state || "");
+        if (data.is_final) return !!data.ok;
+      }
+      return false;
     }
 
     const _PF = "pf-", _DF = "df-";
@@ -1347,52 +1395,13 @@
 
     function _allFields() {
       return [
-        ...(_previewCurrent.dataset_fields || []).map(f => ({ f, id: _DF + f.key })),
-        ...(_previewCurrent.fields || []).map(f => ({ f, id: _PF + f.key })),
+        ...((_reviewData && _reviewData.dataset_fields) || []).map(f => ({ f, id: _DF + f.key })),
+        ...((_reviewData && _reviewData.fields) || []).map(f => ({ f, id: _PF + f.key })),
       ];
     }
 
-    function renderPreview(data) {
-      const total = _previewQueue.length;
-      document.getElementById("preview-progress").textContent =
-        (total > 1 ? `Dataset ${_previewIndex + 1} of ${total} — ` : "") +
-        `${data.files.join(", ")} → ${data.dsid}`;
-
-      const warnings = [];
-      if (data.reused_dataset) {
-        warnings.push(`<div class="alert alert-info py-2">These bytes already exist in <code>${escapeHtml(data.dsid)}</code>; that dataset will be updated rather than a new one created.</div>`);
-      }
-      if (data.skipped && data.skipped.length) {
-        const names = data.skipped.map(f => `<code>${escapeHtml(f)}</code>`).join(", ");
-        warnings.push(!data.actual_ingestor
-          ? `<div class="alert alert-warning py-2">Nothing could be parsed from ${names}. The form below is empty — fill it in by hand. The files still upload.</div>`
-          : `<div class="alert alert-warning py-2">No ingestor supports ${names}, so nothing was extracted from ${data.skipped.length > 1 ? "them" : "it"}. ${data.skipped.length > 1 ? "They" : "It"} will still be uploaded.</div>`);
-      }
-      if (data.actual_ingestor && data.requested_ingestor && data.requested_ingestor !== data.actual_ingestor) {
-        warnings.push(`<div class="alert alert-warning py-2">You selected <code>${escapeHtml(data.requested_ingestor)}</code> but <code>${escapeHtml(data.actual_ingestor)}</code> actually ran.</div>`);
-      }
-      document.getElementById("preview-warnings").innerHTML = warnings.join("");
-
-      document.getElementById("preview-dataset-fields").innerHTML =
-        (data.dataset_fields || []).map(f => _fieldRow(f, _DF)).join("");
-
-      const fieldsEl = document.getElementById("preview-fields");
-      if (!data.fields.length) {
-        fieldsEl.innerHTML = `<p class="text-muted mb-0">Nothing was extracted from these files. Use Add field to record anything you want kept.</p>`;
-      } else {
-        fieldsEl.innerHTML = _renderFieldGroups(data.fields, _PF);
-      }
-
-      document.getElementById("preview-added-fields").innerHTML = "";
-      document.getElementById("preview-missing-only").checked = false;
-
-      const extra = {
-        "Other dataset fields": data.other_dataset_fields,
-        "Keywords": data.packet.keywords,
-        "Samples": data.packet.samples,
-        "Children": data.packet.children,
-      };
-      document.getElementById("preview-extra").innerHTML = Object.entries(extra).map(([title, value], i) => `
+    function _accordion(sections) {
+      return Object.entries(sections).map(([title, value], i) => `
         <div class="accordion-item">
           <h2 class="accordion-header">
             <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#pv-acc-${i}">
@@ -1403,15 +1412,120 @@
             <div class="accordion-body"><pre class="mb-0 small">${escapeHtml(JSON.stringify(value, null, 2))}</pre></div>
           </div>
         </div>`).join("");
+    }
+
+    function _roValue(v) {
+      if (v === null || v === undefined || v === "") return "—";
+      if (Array.isArray(v)) {
+        if (!v.length) return "—";
+        return v.map(x => (x && typeof x === "object") ? JSON.stringify(x) : String(x)).join(", ");
+      }
+      return String(v);
+    }
+
+    function _roRows(obj) {
+      const entries = Object.entries(obj || {});
+      if (!entries.length) return `<p class="text-muted small mb-0">Nothing.</p>`;
+      return entries.map(([k, v]) => {
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          return `<div class="field-group mb-2">
+            <div class="fw-semibold small">${escapeHtml(k)}</div>
+            <div class="ps-3">${_roRows(v)}</div>
+          </div>`;
+        }
+        return `<div class="row field-row py-1">
+          <div class="col-sm-4 small text-muted">${escapeHtml(k)}</div>
+          <div class="col-sm-8 small">${escapeHtml(_roValue(v))}</div>
+        </div>`;
+      }).join("");
+    }
+
+    function _setEditAffordances(on) {
+      document.getElementById("preview-edit-filter").classList.toggle("d-none", !on);
+      document.getElementById("preview-edit-add").classList.toggle("d-none", !on);
+      document.getElementById("preview-cleared-note").classList.add("d-none");
+    }
+
+    // Read-only: what is shown is exactly the packet that will be pushed, with nothing
+    // applied on top of it.
+    function renderPreview(data) {
+      _reviewMode = false;
+      _reviewData = null;
+      const group = _previewGroups[_groupIndex] || [];
+      const groups = _previewGroups.length;
+      document.getElementById("preview-title").textContent = "Preview upload";
+      document.getElementById("preview-md-hint").textContent = "Values read from this file.";
+      _setEditAffordances(false);
+      document.getElementById("btn-preview-confirm-label").textContent = "Send";
+      document.getElementById("btn-preview-cancel").textContent = "Cancel";
+
+      document.getElementById("preview-progress").textContent =
+        (groups > 1 ? `Dataset ${_groupIndex + 1} of ${groups} — ` : "") +
+        (group.length > 1 ? `file ${_fileIndex + 1} of ${group.length} — ` : "") +
+        `${data.file} → ${data.dsid}`;
+
+      const warnings = [];
+      if (data.reused_dataset) {
+        warnings.push(`<div class="alert alert-info py-2">These bytes already exist in <code>${escapeHtml(data.dsid)}</code>; that dataset will be updated rather than a new one created.</div>`);
+      }
+      if (!data.parsed) {
+        warnings.push(`<div class="alert alert-warning py-2">No ingestor supports <code>${escapeHtml(data.file)}</code>, so nothing was extracted from it. It will still be uploaded.</div>`);
+      }
+      if (data.actual_ingestor && data.requested_ingestor && data.requested_ingestor !== data.actual_ingestor) {
+        warnings.push(`<div class="alert alert-warning py-2">You selected <code>${escapeHtml(data.requested_ingestor)}</code> but <code>${escapeHtml(data.actual_ingestor)}</code> actually ran.</div>`);
+      }
+      document.getElementById("preview-warnings").innerHTML = warnings.join("");
+
+      document.getElementById("preview-dataset-fields").innerHTML = _roRows(data.packet.dataset_fields);
+      document.getElementById("preview-fields").innerHTML = _roRows(data.packet.scientific_metadata);
+      document.getElementById("preview-added-fields").innerHTML = "";
+
+      document.getElementById("preview-extra").innerHTML = _accordion({
+        "Keywords": data.packet.keywords,
+        "Samples": data.packet.samples,
+        "Children": data.packet.children,
+      });
+    }
+
+    // Editable: the files are already pushed, so this form only fills in what no file
+    // supplied. Corrections are PATCHed, never samples or children.
+    function renderReview(data) {
+      _reviewMode = true;
+      _reviewData = data;
+      document.getElementById("preview-title").textContent = "Add missing information";
+      document.getElementById("preview-md-hint").textContent = "Values stored for this dataset.";
+      _setEditAffordances(true);
+      document.getElementById("btn-preview-confirm-label").textContent = "Save";
+      document.getElementById("btn-preview-cancel").textContent = "Done";
+
+      document.getElementById("preview-progress").textContent =
+        `All files uploaded to ${data.dsid}.`;
+      document.getElementById("preview-warnings").innerHTML = "";
+
+      document.getElementById("preview-dataset-fields").innerHTML =
+        (data.dataset_fields || []).map(f => _fieldRow(f, _DF)).join("");
+
+      const fieldsEl = document.getElementById("preview-fields");
+      fieldsEl.innerHTML = (data.fields || []).length
+        ? _renderFieldGroups(data.fields, _PF)
+        : `<p class="text-muted mb-0">Nothing was extracted from these files. Use Add field to record anything you want kept.</p>`;
+
+      document.getElementById("preview-added-fields").innerHTML = "";
+      document.getElementById("preview-missing-only").checked = false;
+
+      document.getElementById("preview-extra").innerHTML = _accordion({
+        "Other dataset fields": data.other_dataset_fields,
+        "Keywords": data.keywords,
+      });
 
       _updateClearedNote();
       document.querySelectorAll("#preview-fields [data-key], #preview-dataset-fields [data-key]")
         .forEach(el => el.addEventListener("input", _updateClearedNote));
     }
 
-    // Emptying a parsed value does not delete it. The submitted edits skip blanks, and
-    // the re-parse on the server treats "" as absent and puts its own value back. Say so
-    // rather than letting the operator think the field was cleared.
+    // Emptying a stored value does not delete it: the submitted edits skip blanks and the
+    // corrections are PATCHed, so the stored value stays. Say so rather than letting the
+    // operator think the field was cleared.
     function _updateClearedNote() {
       const cleared = _allFields().filter(({ f, id }) => {
         if (!f.editable || f.value === null || f.value === undefined || f.value === "") return false;
@@ -1424,7 +1538,7 @@
         note.innerHTML =
           `<div class="fw-semibold mb-1">Emptying a field will not clear it</div>` +
           `${cleared.map(f => `<code>${escapeHtml(f.label)}</code>`).join(", ")} ` +
-          `will keep the parsed value. To change one, type the correct value instead of deleting it.`;
+          `will keep the stored value. To change one, type the correct value instead of deleting it.`;
       }
     }
 
@@ -1489,19 +1603,19 @@
     }
 
     async function confirmPreview() {
+      if (_reviewMode) return applyReview();
       const btn = document.getElementById("btn-preview-confirm");
       btn.disabled = true;
       setSpinner("preview-confirm", true);
+      const group = _previewGroups[_groupIndex];
       try {
-        const res = await fetch("/api/upload", {
+        const res = await fetch("/api/preview/push", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ..._previewParams,
-            session_folder_paths: _previewQueue[_previewIndex],
-            preview_dsid: _previewCurrent.dsid,
-            metadata_edits: { ..._collectEdits("preview-fields"), ..._collectAddedFields() },
-            dataset_field_edits: _collectEdits("preview-dataset-fields"),
+            dsid: _previewCurrent.dsid,
+            finalize: _fileIndex === group.length - 1,
           }),
         });
         const data = await res.json();
@@ -1509,8 +1623,22 @@
           showStatus("Upload failed: " + (data.error || res.status), "danger");
           return;
         }
-        _previewIndex += 1;
-        if (_previewIndex < _previewQueue.length) {
+        const progress = document.getElementById("preview-progress");
+        const ok = await _awaitFlow(data.flow_run_id, state => {
+          progress.textContent = `Sending ${_previewCurrent.file}… ${state.toLowerCase()}`;
+        });
+        if (!ok) {
+          showStatus(`Upload of ${_previewCurrent.file} did not complete; the rest of this dataset was not sent.`, "danger");
+          previewModal.hide();
+          return;
+        }
+        _fileIndex += 1;
+        if (_fileIndex >= group.length) {
+          _groupIndex += 1;
+          _fileIndex = 0;
+          _groupDsid = null;
+        }
+        if (_groupIndex < _previewGroups.length) {
           await _runPreviewStep();
         } else {
           previewModal.hide();
@@ -1519,7 +1647,7 @@
             uploadModal = new bootstrap.Modal(document.getElementById("upload-modal"));
           }
           uploadModal.show();
-          showUploadSuccess("Upload running", data);
+          showUploadSuccess("Upload complete", data);
         }
       } catch (e) {
         showStatus("Upload failed: " + e.message, "danger");
@@ -1531,15 +1659,99 @@
 
     async function cancelPreview() {
       const dsid = _previewCurrent && _previewCurrent.dsid;
+      const wasReview = _reviewMode;
       if (previewModal) previewModal.hide();
-      _previewQueue = [];
+      _previewGroups = [];
       _previewCurrent = null;
-      if (dsid) {
+      _groupDsid = null;
+      _reviewMode = false;
+      _reviewData = null;
+      // Review's files are already in Crucible; only an unsent preview has anything to drop.
+      if (dsid && !wasReview) {
         fetch("/api/preview/cancel", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dsid }),
         }).catch(() => {});
+      }
+    }
+
+    // Review: an ordinary upload, then the stored record offered for correction. The flow
+    // waits on server-side ingestion, so once it is complete there is something to review.
+    async function startReviewRequest(params) {
+      setSpinner("upload", true);
+      document.getElementById("btn-upload").disabled = true;
+      const body = { ...params };
+      if (_selectedSessionDsid !== null) body.session_dsid = _selectedSessionDsid;
+      try {
+        showStatus("Uploading… the form to add missing information opens once every file has landed.", "info");
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus("Upload failed: " + (data.error || res.status), "danger");
+          return;
+        }
+        const ok = await _awaitFlow(data.flow_run_id, s => {
+          showStatus(`Uploading to ${data.dsid}… ${s.toLowerCase()}`, "info");
+        });
+        if (!ok) {
+          showStatus(`Upload of ${data.dsid} did not complete; nothing to review.`, "danger");
+          return;
+        }
+        await openReview(data.dsid);
+      } catch (e) {
+        showStatus("Upload failed: " + e.message, "danger");
+      } finally {
+        setSpinner("upload", false);
+        document.getElementById("btn-upload").disabled = false;
+      }
+    }
+
+    async function openReview(dsid) {
+      const res = await fetch(`/api/review/form?dsid=${encodeURIComponent(dsid)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        showStatus("Could not load the record: " + (data.error || res.status), "danger");
+        return;
+      }
+      clearStatus();
+      _previewCurrent = { dsid };
+      renderReview(data);
+      _showPreviewModal();
+    }
+
+    async function applyReview() {
+      const btn = document.getElementById("btn-preview-confirm");
+      btn.disabled = true;
+      setSpinner("preview-confirm", true);
+      try {
+        const res = await fetch("/api/review/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dsid: _reviewData.dsid,
+            metadata_edits: { ..._collectEdits("preview-fields"), ..._collectAddedFields() },
+            dataset_field_edits: _collectEdits("preview-dataset-fields"),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showStatus("Could not save: " + (data.error || res.status), "danger");
+          return;
+        }
+        previewModal.hide();
+        _reviewMode = false;
+        _reviewData = null;
+        showStatus(`Saved to ${data.dsid}.`, "success");
+      } catch (e) {
+        showStatus("Could not save: " + e.message, "danger");
+      } finally {
+        btn.disabled = false;
+        setSpinner("preview-confirm", false);
       }
     }
 
@@ -1603,18 +1815,18 @@
       applyUploadModeUI();
       const isMultiAssignment = state.uiModes[instrument] === 'multi_assignment';
       const isPhotobox = state.uiModes[instrument] === 'photobox';
-      // Preview parses locally and needs one record per selection, so it only applies to
-      // instruments that upload files rather than whole sessions.
-      const isPreview = state.uiModes[instrument] === 'preview' && !state.isSession;
+      // Preview parses locally, one file at a time, so it only applies to instruments that
+      // upload files rather than whole sessions. It sits alongside Upload, not instead of it.
+      const canPreview = !state.isSession && !isMultiAssignment && !isPhotobox;
 
       // Hide all per-instrument panels
       document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
 
       document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment || isPhotobox);
-      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox || isPreview);
+      document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
-      document.getElementById("btn-preview").classList.toggle("d-none", !isPreview);
+      document.getElementById("btn-preview").classList.toggle("d-none", !canPreview);
 
       if (!isMultiAssignment && !isPhotobox) {
         _clearNirvanaUI();

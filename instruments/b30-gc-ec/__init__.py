@@ -1,6 +1,6 @@
 NAME = 'gc-b30-001'
 INGESTOR = ''
-UI_MODE = 'preview'
+UI_MODE = 'review'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
 FLOW = None

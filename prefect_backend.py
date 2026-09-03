@@ -394,6 +394,31 @@ def dataset_exists(dsid: str) -> bool:
 
 
 @task
+def ensure_dataset_record(dsid: str, orcid: str, project_id: str,
+                          instrument_name: str | None = None) -> bool:
+    """Make sure there is a record at dsid for push_packet to PATCH into.
+
+    push_packet updates rather than creates, so it 404s on a fresh mfid. A dsid that came
+    back from a SHA match already has its record and is left alone. Nothing but the
+    identifying columns is set here; the packet supplies everything else.
+
+    Returns True if a record was created.
+    """
+    logger = get_run_logger()
+    if dataset_exists(dsid):
+        logger.info(f'{dsid} already exists; pushing into it')
+        return False
+
+    ds = BaseDataset(unique_id=dsid,
+                     owner=orcid,
+                     project_id=project_id,
+                     instrument_id=instrument_id_from_name(instrument_name))
+    client.datasets.create(ds)
+    logger.info(f'created bare record {dsid}')
+    return True
+
+
+@task
 def update_dataset(files: list[str],
                    dsid: str,
                    instrument_name: str | None = None,
@@ -520,41 +545,6 @@ def purge_stale_previews(max_age_s: int = _PREVIEW_MAX_AGE_S) -> int:
     return removed
 
 
-def _is_empty(value) -> bool:
-    return value is None or value == '' or value == [] or value == {}
-
-
-SUMMED_DATASET_FIELDS = frozenset({'size'})
-
-
-def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def _sum_fields(base: dict, incoming: dict, keys) -> None:
-    for key in keys:
-        value = incoming.get(key)
-        if not _is_number(value):
-            continue
-        running = base.get(key)
-        base[key] = (running if _is_number(running) else 0) + value
-
-
-def _fill_gaps(base: dict, incoming: dict, collisions: list, path: str = '',
-               skip=frozenset()) -> dict:
-    for key, value in incoming.items():
-        here = f'{path}.{key}' if path else key
-        if key in skip:
-            continue
-        if key not in base or _is_empty(base[key]):
-            base[key] = value
-        elif isinstance(base[key], dict) and isinstance(value, dict):
-            _fill_gaps(base[key], value, collisions, here)
-        elif not _is_empty(value) and base[key] != value:
-            collisions.append({'field': here, 'kept': base[key], 'discarded': value})
-    return base
-
-
 def _dedup(items: list) -> list:
     seen, out = set(), []
     for item in items:
@@ -564,90 +554,26 @@ def _dedup(items: list) -> list:
     return out
 
 
-def _dedup_by(items: list, key) -> list:
-    seen, out = set(), []
-    for item in items:
-        k = key(item)
-        if k is None:
-            out.append(item)
-        elif k not in seen:
-            seen.add(k)
-            out.append(item)
-    return out
+def parse_one_file(path: str, dsid: str, ingestor_name: str = '') -> tuple[object, bool]:
+    """Parse a single file into a single packet holding that one file_to_upload.
 
+    Nothing is merged here. Files uploaded together share a dsid and are pushed one at a
+    time, so each parse reads the record back and Crucible accumulates the result.
 
-def fold_into_packet(packet, parsed, collisions: list, source: str = ''):
-    """Update the running packet with everything the next file contributed. Values
-    already extracted are kept; a differing value that gets dropped is reported. Size is
-    the exception: it is per-file bytes, so it accumulates instead of being kept."""
-    found: list[dict] = []
-    _fill_gaps(packet.scientific_metadata, parsed.scientific_metadata, found)
-    _fill_gaps(packet.dataset_fields, parsed.dataset_fields, found,
-               skip=SUMMED_DATASET_FIELDS)
-    _sum_fields(packet.dataset_fields, parsed.dataset_fields, SUMMED_DATASET_FIELDS)
-    for c in found:
-        c['file'] = source
-    collisions.extend(found)
-    packet.keywords = _dedup(list(packet.keywords) + list(parsed.keywords))
-    packet.samples = _dedup_by(list(packet.samples) + list(parsed.samples),
-                               lambda s: s.get('unique_id'))
-    packet.children = _dedup_by(list(packet.children) + list(parsed.children),
-                                lambda c: (c.get('dataset') or {}).get('unique_id'))
-    packet.thumbnails = list(packet.thumbnails) + list(parsed.thumbnails)
-    return packet
-
-
-def ingestion_githash() -> str | None:
-    """Resolve the commit the ingestion library was installed from, the same way the
-    server-side consumer does, so a locally parsed record is traceable to exact code."""
-    from importlib.metadata import distribution
-    try:
-        direct_url = distribution('crucible-ingestion').read_text('direct_url.json')
-        return json.loads(direct_url)['vcs_info']['commit_id']
-    except Exception as err:
-        logger.warning(f'Could not resolve crucible-ingestion githash: {err}')
-        return None
-
-
-def parse_for_preview(files: list[str], dsid: str,
-                      ingestor_name: str = '') -> tuple[object, list[dict], list[dict], list[str]]:
-    """Parse each file into one running packet, so by the last file the maximal amount of
-    metadata has been extracted. Nothing is pushed until the operator approves.
-
-    Files no ingestor claims are skipped and named in the fourth return value; they are
-    still uploaded, just with nothing extracted from them. If that is every file the packet
-    comes back empty and the operator fills the form in by hand.
-
-    The third return value records which ingestor actually handled each file. A named
-    ingestor that does not support a file is silently swapped for an auto-detected one,
-    so this is the only place that distinction is observable."""
+    A file no ingestor claims still gets a packet, so it still uploads; the second return
+    value says whether anything was extracted from it.
+    """
     from crucible_ingestion.data_ingestion import parse
     from crucible_ingestion.packet import IngestionPacket
-    packet = None
-    collisions: list[dict] = []
-    per_file: list[dict] = []
-    skipped: list[str] = []
-    for path in files:
-        name = os.path.basename(path)
-        parsed = parse(path, dsid, ingestor_name or None)
-        if parsed is None:
-            logger.warning(f'No ingestor supports {name}; skipping')
-            skipped.append(name)
-            continue
-        per_file.append({'file': name, 'ingestion_class': parsed.ingestion_class})
-        if packet is None:
-            packet = parsed
-        else:
-            fold_into_packet(packet, parsed, collisions, name)
+    packet = parse(path, dsid, ingestor_name or None)
     if packet is None:
-        packet = IngestionPacket(unique_id=dsid, ingestion_class='')
-    return packet, collisions, per_file, skipped
+        logger.warning(f'No ingestor supports {os.path.basename(path)}; uploading it unparsed')
+        return IngestionPacket(unique_id=dsid, ingestion_class='', file_to_upload=path), False
+    return packet, True
 
 
-# size is measured from the file and parse_provenance is a record of what the machine did,
-# so an operator's value for either would only ever be wrong.
-LOCKED_FIELDS = {'size', 'parse_provenance'}
-HIDDEN_FIELDS = {'parse_provenance'}
+# size is measured from the file, so an operator's value for it would only ever be wrong.
+LOCKED_FIELDS = {'size'}
 
 _MISSING_STRINGS = {'na', 'nan', 'unknown'}
 
@@ -691,8 +617,6 @@ def build_form_descriptor(scientific_metadata: dict) -> list[dict]:
     def walk(node: dict, path: list[str]):
         for name, value in node.items():
             here = path + [name]
-            if len(here) == 1 and name in HIDDEN_FIELDS:
-                continue
             if isinstance(value, dict) and value:
                 walk(value, here)
                 continue
@@ -751,29 +675,29 @@ def other_dataset_fields(dataset_fields: dict) -> dict:
     return {k: v for k, v in (dataset_fields or {}).items() if k not in DATASET_FORM_KEYS}
 
 
-def apply_dataset_field_edits(packet, edits: dict):
-    """Write operator corrections onto the packet's dataset columns. Keys outside
+def apply_dataset_field_edits(fields: dict, edits: dict) -> dict:
+    """Write operator corrections onto a dict of dataset columns. Keys outside
     DATASET_FORM_FIELDS are dropped: this dict comes straight from the browser."""
     for key, value in (edits or {}).items():
         if key in DATASET_FORM_KEYS:
-            packet.dataset_fields[key] = value
-    return packet
+            fields[key] = value
+    return fields
 
 
-def apply_metadata_edits(packet, edits: dict):
+def apply_metadata_edits(metadata: dict, edits: dict) -> dict:
     """Write edited values back to their dotted paths. Scientific metadata is the only
-    part of a packet the operator may change."""
+    part of a record the operator may change."""
     for key, value in (edits or {}).items():
         parts = [p for p in str(key).split('.') if p]
         if not parts or parts[0] in LOCKED_FIELDS:
             continue
-        cur = packet.scientific_metadata
+        cur = metadata
         for part in parts[:-1]:
             if not isinstance(cur.get(part), dict):
                 cur[part] = {}
             cur = cur[part]
         cur[parts[-1]] = value
-    return packet
+    return metadata
 
 
 def preview_view(packet) -> dict:
@@ -782,6 +706,57 @@ def preview_view(packet) -> dict:
     view = packet.to_dict()
     view['thumbnail_count'] = len(view.pop('thumbnails', None) or [])
     return view
+
+
+def review_view(dsid: str) -> dict:
+    """The record as it actually stands after every file has been pushed, shaped as a form
+    so the operator can fill in what no file supplied. Read back from Crucible rather than
+    taken from the last packet, so what is offered for correction is what is stored."""
+    record = client.datasets.get(dsid, include_metadata=True)
+    metadata = (record.get('scientific_metadata') or {}).get('scientific_metadata', {})
+    return {
+        'dsid': dsid,
+        'fields': build_form_descriptor(metadata),
+        'dataset_fields': build_dataset_form_descriptor(record),
+        'other_dataset_fields': other_dataset_fields(record),
+        'keywords': record.get('keywords') or [],
+    }
+
+
+def apply_review_edits(dsid: str, metadata_edits: dict, dataset_field_edits: dict) -> None:
+    """Apply the operator's corrections to a record whose files are already pushed.
+
+    The edits are written onto the full stored document and the whole document is sent
+    back, rather than sending the changed keys alone: a PATCH of {'a': {'b': 1}} would
+    replace all of 'a' if the API merges only at the top level. PATCH, not overwrite, so
+    a key can be corrected but never removed.
+    """
+    record = client.datasets.get(dsid, include_metadata=True)
+    metadata = (record.get('scientific_metadata') or {}).get('scientific_metadata', {})
+
+    apply_metadata_edits(metadata, metadata_edits)
+    dataset_updates = apply_dataset_field_edits({}, dataset_field_edits)
+
+    if metadata:
+        client.datasets.update_scientific_metadata(dsid, metadata, overwrite=False)
+    if dataset_updates:
+        client.datasets.update(dsid, **dataset_updates)
+
+
+def flow_status(flow_run_id: str) -> dict:
+    """Whether a flow run has finished, and whether it worked. The preview queue needs
+    this: file N+1 is not parsed until file N's push has landed, since that push is what
+    file N+1 reads back."""
+    from prefect.client.orchestration import get_client as get_prefect_client
+    with get_prefect_client(sync_client=True) as prefect:
+        run = prefect.read_flow_run(flow_run_id)
+    state = run.state
+    return {
+        'state': state.type.value if state else None,
+        'is_final': bool(state and state.is_final()),
+        'ok': bool(state and state.is_completed()),
+        'message': (state.message if state else None) or '',
+    }
 
 
 def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str = '') -> list[dict]:
@@ -1204,56 +1179,44 @@ def parent_child_upload(file: str,
     return parent_dsid
 
 
-# Upload path for datasets the operator previewed and corrected locally. Preview wrote
-# nothing to Crucible, so unless the file's SHA matched a dataset that already exists,
-# this is where the record first appears.
+# One file, one packet, one push. push_packet writes the dataset columns, samples,
+# children, thumbnails and keywords the parse produced, then uploads that packet's single
+# file_to_upload with skip_ingestion=True and stamps the local ingestor and its git hash
+# onto the ingestion request. The server never re-parses, so the packet the operator
+# approved is exactly what the record ends up holding.
 #
-# datasets.create() (or datasets.update() when the record already exists) writes the
-# record, PATCH-merges the scientific metadata, and only then calls add_file() per file. add_file() requests server-side ingestion, so the
-# ingestors run again on the server. That redundancy is deliberate: it records the
-# ingestion code git hash and ingestor class on each ingestion request, and the re-parse
-# merges beneath the operator's values rather than over them. The jobs are left to run
-# concurrently: files of one dataset do not parse overlapping fields, so they have nothing
-# to race over.
-@flow(flow_run_name=_run_name("preview-upload"))
-def preview_upload(files: list[str],
-                   dsid: str,
-                   instrument_name: str | None = None,
-                   project_id: str | None = None,
-                   orcid: str | None = None,
-                   sample_unique_id: str | list[str] | None = None,
-                   session_dsid: str | None = None,
-                   ingestor: str | None = None,
-                   comments: str | None = None) -> str:
+# Files uploaded together share a dsid and are pushed one at a time. Each parse reads the
+# record back first, so Crucible accumulates them and already-stored values win over
+# freshly parsed ones. That ordering is load-bearing — these must not run concurrently.
+@flow(flow_run_name=_run_name("push-preview-file"))
+def push_preview_file(dsid: str,
+                      instrument_name: str | None = None,
+                      project_id: str | None = None,
+                      orcid: str | None = None,
+                      sample_unique_id: str | list[str] | None = None,
+                      session_dsid: str | None = None,
+                      finalize: bool = True) -> str:
+    from crucible_ingestion.data_ingestion import push_packet
     logger = get_run_logger()
     packet = load_preview_packet(dsid)
 
-    ds_fields = packet.dataset_fields or {}
-    named = {k: (ds_fields.get(k) or None) for k in DATASET_FORM_KEYS}
-
-    common = dict(
-        files=files,
-        instrument_name=instrument_name,
-        project_id=project_id,
-        orcid=orcid,
-        kw_list=list(packet.keywords or []),
-        comments=comments,
-        ingestor=ingestor or packet.ingestion_class,
-        scientific_metadata=packet.scientific_metadata,
-        dataset_name=named['dataset_name'],
-        measurement=named['measurement'],
-        data_type=named['data_type'],
-        session_name=named['session_name'],
-        wait_for_ingestion=False,
-    )
-    if dataset_exists(dsid):
-        update_dataset(dsid=dsid, **common)
-    else:
-        create_dataset(dsid=dsid, **common)
-
-    link_dataset_and_sample(dsid, sample_unique_id)
-    link_dataset_to_session(dsid, session_dsid)
+    ensure_dataset_record(dsid, orcid, project_id, instrument_name)
+    push_packet(packet, include_file=True)
     delete_preview_packet(dsid)
-    _run_post_processing(instrument_name, dsid)
-    logger.info(f"Preview upload complete for {dsid}")
+    logger.info(f"Pushed {packet.file_to_upload} into {dsid}")
+
+    # Sample and session links belong to the dataset, not to each file, so they wait until
+    # the last file of the selection has landed. So does post-processing, which reads the
+    # finished record.
+    if finalize:
+        link_dataset_and_sample(dsid, sample_unique_id)
+        link_dataset_to_session(dsid, session_dsid)
+        _run_post_processing(instrument_name, dsid)
+        logger.info(f"Preview upload complete for {dsid}")
     return dsid
+
+
+# Review mode has no flow of its own: it is an ordinary upload_dataset run, which the
+# browser waits on before asking for the stored record to correct. create_dataset defaults
+# to wait_for_ingestion=True, so the run is not complete until the server has parsed
+# everything and there is something to review.

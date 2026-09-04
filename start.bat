@@ -17,6 +17,9 @@ for %%A in (%*) do (
 set PREFECT_API_URL=http://127.0.0.1:4200/api
 set PREFECT_API_DATABASE_TIMEOUT=300
 
+:: Create a local instrument_conf.py from the tracked default on first run
+if not exist instrument_conf.py copy instrument_conf.default.py instrument_conf.py
+
 :: Start Prefect server in the background
 start /b uv run prefect server start
 timeout /t 3 /nobreak >nul

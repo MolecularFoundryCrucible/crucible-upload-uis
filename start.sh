@@ -10,6 +10,9 @@ done
 export FLASK_PORT
 export PREFECT_API_URL="http://127.0.0.1:4200/api"
 
+# Create a local instrument_conf.py from the tracked default on first run
+[ -f instrument_conf.py ] || cp instrument_conf.default.py instrument_conf.py
+
 # Kill the whole process group on Ctrl+C / exit so Prefect server,
 # serve_flows.py, and their Python grandchildren shut down together
 # instead of being orphaned and continuing to log for minutes.

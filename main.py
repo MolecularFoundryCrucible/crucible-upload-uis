@@ -421,7 +421,7 @@ def do_preview():
     packet.scientific_metadata["parse_provenance"] = provenance
 
     # With no record behind the dsid, parse() has no project/owner/instrument to read
-    # back, so fill them from the form. These are what create_dataset will use at upload
+    # back, so fill them from the form. These are what task_create_dataset will use at upload
     # time; showing them now keeps the preview an honest picture of the finished record.
     for field, value in (("project_id", project_id),
                          ("owner_orcid", orcid),
@@ -578,12 +578,12 @@ def do_upload():
             return jsonify({"error": str(e)}), 500
 
     # Non-session mode. Post-processing (e.g. insitu aggregation) is handled inside
-    # upload_dataset per instrument config, so no instrument special-casing is needed.
+    # flow_upload_dataset per instrument config, so no instrument special-casing is needed.
     # - One dataset (a single file, or several the operator chose to keep together):
     #   sync SHA lookup so the UI gets the dsid immediately, then one upload-dataset run.
     #   Dedup is on the first file's SHA, so re-uploading resumes the existing record.
-    # - Otherwise: one multi_file_upload run that builds the SHA map once and fans out
-    #   per-file upload_dataset sub-flows; UI shows the project page.
+    # - Otherwise: one flow_multi_file_upload run that builds the SHA map once and fans out
+    #   per-file flow_upload_dataset sub-flows; UI shows the project page.
     group_as_one = bool(data.get("group_as_one"))
     if len(session_folder_paths) == 1 or group_as_one:
         paths = session_folder_paths
@@ -614,8 +614,8 @@ def do_upload():
             "dsid": dsid,
         })
 
-    # Generic multi-file path: fire one multi_file_upload run; it handles SHA
-    # dedup and fans out per-file upload_dataset sub-flows.
+    # Generic multi-file path: fire one flow_multi_file_upload run; it handles SHA
+    # dedup and fans out per-file flow_upload_dataset sub-flows.
     try:
         flow_run = run_deployment(
             "multi-file-upload/multi-file-upload",

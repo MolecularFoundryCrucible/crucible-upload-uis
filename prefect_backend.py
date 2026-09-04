@@ -31,6 +31,11 @@ try:
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 
+    # otherwise crucible_ingestion lazily builds its own client from local config,
+    # which may point at a different API than the one this UI is talking to
+    import crucible_ingestion
+    crucible_ingestion.set_client(client)
+
 except Exception as e:
     logger.error(f'Client connection failed with error {e}. \
                  You can check your Crucible configuration by \
@@ -297,7 +302,7 @@ def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None
 
 
 @task
-def identify_session_files(session_folder_path: str) -> list[str]:
+def task_identify_session_files(session_folder_path: str) -> list[str]:
     from instrument_conf import ACCEPTABLE_FILE_TYPES
     max_size = 20 * 1024 ** 3  # 20 GiB
     return [
@@ -319,7 +324,7 @@ def _compute_sha256(file_path: str) -> str:
 
 
 @task
-def create_dataset(files: list[str],
+def task_create_dataset(files: list[str],
                    instrument_name: str | None = None,
                    project_id: str | None = None,
                    orcid: str | None = None,
@@ -394,7 +399,7 @@ def dataset_exists(dsid: str) -> bool:
 
 
 @task
-def update_dataset(files: list[str],
+def task_update_dataset(files: list[str],
                    dsid: str,
                    instrument_name: str | None = None,
                    project_id: str | None = None,
@@ -448,7 +453,7 @@ def update_dataset(files: list[str],
 
 
 @task(retries=3, retry_delay_seconds=5)
-def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
+def task_link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
     if session_dsid is not None:
         response = client.datasets.link_parent_child(parent_dataset_id=session_dsid, child_dataset_id=new_ds_dsid)
         return response
@@ -456,7 +461,7 @@ def link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
 
 
 @task(retries=3, retry_delay_seconds=5)
-def link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] | None = None):
+def task_link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] | None = None):
     if not sample_unique_id:
         return None
     uuids = [sample_unique_id] if isinstance(sample_unique_id, str) else sample_unique_id
@@ -600,13 +605,8 @@ def fold_into_packet(packet, parsed, collisions: list, source: str = ''):
 def ingestion_githash() -> str | None:
     """Resolve the commit the ingestion library was installed from, the same way the
     server-side consumer does, so a locally parsed record is traceable to exact code."""
-    from importlib.metadata import distribution
-    try:
-        direct_url = distribution('crucible-ingestion').read_text('direct_url.json')
-        return json.loads(direct_url)['vcs_info']['commit_id']
-    except Exception as err:
-        logger.warning(f'Could not resolve crucible-ingestion githash: {err}')
-        return None
+    from crucible_ingestion.utils import get_ingestion_githash
+    return get_ingestion_githash()
 
 
 def parse_for_preview(files: list[str], dsid: str,
@@ -817,7 +817,7 @@ def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str =
 
 
 @task(retries=3, retry_delay_seconds=5)
-def request_post_processing(name: str, new_ds_dsid: str):
+def task_request_post_processing(name: str, new_ds_dsid: str):
     # name maps to client.datasets.request_<name>, e.g. "insitu_aggregation".
     return getattr(client.datasets, f"request_{name}")(new_ds_dsid)
 
@@ -830,9 +830,9 @@ def _run_post_processing(instrument_name: str, dsid: str):
 
     for name in POST_PROCESSING_REQUESTS.get(instrument_name, []):
         if CHAIN_POST_PROCESSING:
-            request_post_processing(name, dsid)
+            task_request_post_processing(name, dsid)
         else:
-            request_post_processing.submit(name, dsid)
+            task_request_post_processing.submit(name, dsid)
 
 
 def _split_h5_position(source_path: str, position_label: str, output_dir: str) -> str:
@@ -895,11 +895,11 @@ def _run_name(prefix):
 
 # Generic per-dataset upload flow. Every upload path bottoms out here: session
 # children (session_dsid + session_name passed), standalone multi-file uploads
-# (dsid pre-assigned by multi_file_upload), and single-file uploads. Post-processing
+# (dsid pre-assigned by flow_multi_file_upload), and single-file uploads. Post-processing
 # (e.g. insitu aggregation) is driven by POST_PROCESSING_REQUESTS keyed on
 # instrument_name, so it applies uniformly no matter how the upload was started.
-@flow(flow_run_name=_run_name("upload"))
-def upload_dataset(files: list,
+@flow(name="upload-dataset", flow_run_name=_run_name("upload"))
+def flow_upload_dataset(files: list,
                    instrument_name: str,
                    project_id: str,
                    orcid: str,
@@ -910,7 +910,7 @@ def upload_dataset(files: list,
                    kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    new_ds_dsid = create_dataset(files=files,
+    new_ds_dsid = task_create_dataset(files=files,
                                  instrument_name=instrument_name,
                                  project_id=project_id,
                                  orcid=orcid,
@@ -920,16 +920,16 @@ def upload_dataset(files: list,
                                  comments=comments,
                                  ingestor=ingestor)
 
-    link_dataset_to_session(new_ds_dsid, session_dsid)
-    link_dataset_and_sample(new_ds_dsid, sample_unique_id)
+    task_link_dataset_to_session(new_ds_dsid, session_dsid)
+    task_link_dataset_and_sample(new_ds_dsid, sample_unique_id)
 
     _run_post_processing(instrument_name, new_ds_dsid)
 
     return new_ds_dsid
 
 # flow to upload a session of files (folder → parent dataset + child per file)
-@flow(flow_run_name=_run_name("session"))
-def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
+@flow(name="session-upload", flow_run_name=_run_name("session"))
+def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
                        sample_unique_id: str | None = None, session_dsid: str | None = None,
                        kw_list: list[str] | None = None, comments: str | None = None,
                        ingestor: str | None = None) -> str:
@@ -951,7 +951,7 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
 
     # returns list of files in folder path that are less than 20GB
     # with an accepted file type
-    session_files = identify_session_files(session_folder_path)
+    session_files = task_identify_session_files(session_folder_path)
     logger.info(f'{session_files=}')
 
     valid_dsids = child_dsids(session_dsid)
@@ -1026,8 +1026,8 @@ def session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
 # existing dataset ids are fetched once; then per file a SHA lookup reuses the
 # existing dsid (sub-flow no-ops) or a fresh mfid is generated, and one
 # upload-dataset sub-flow is fired.
-@flow(flow_run_name=_run_name("multi-file-upload"))
-def multi_file_upload(files: list[str],
+@flow(name="multi-file-upload", flow_run_name=_run_name("multi-file-upload"))
+def flow_multi_file_upload(files: list[str],
                       instrument_name: str,
                       project_id: str,
                       orcid: str,
@@ -1071,8 +1071,8 @@ def multi_file_upload(files: list[str],
     return submitted
 
 
-@flow(flow_run_name=_run_name("multi-assignment"))
-def multi_assignment_upload(file: str,
+@flow(name="multi-assignment-upload", flow_run_name=_run_name("multi-assignment"))
+def flow_multi_assignment_upload(file: str,
                    sample_uuids: list[str],
                    project_id: str,
                    orcid: str,
@@ -1085,7 +1085,7 @@ def multi_assignment_upload(file: str,
                    link_samples: bool = False) -> str:
     logger = get_run_logger()
 
-    new_dsid = create_dataset(files=[file],
+    new_dsid = task_create_dataset(files=[file],
                               instrument_name=instrument_name,
                               project_id=project_id,
                               orcid=orcid,
@@ -1095,7 +1095,7 @@ def multi_assignment_upload(file: str,
                               ingestor=ingestor,
                               excluded_uuids=excluded_uuids)
     if link_samples and sample_uuids:
-        link_dataset_and_sample(new_dsid, sample_uuids)
+        task_link_dataset_and_sample(new_dsid, sample_uuids)
         logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
 
     _run_post_processing(instrument_name, new_dsid)
@@ -1103,8 +1103,8 @@ def multi_assignment_upload(file: str,
     return new_dsid
 
 
-@flow(flow_run_name=_run_name("flat-multi"))
-def flat_multi_upload(file: str,
+@flow(name="flat-multi-upload", flow_run_name=_run_name("flat-multi"))
+def flow_flat_multi_upload(file: str,
                       sample_uuids: list[str],
                       project_id: str,
                       orcid: str,
@@ -1115,18 +1115,18 @@ def flat_multi_upload(file: str,
     logger = get_run_logger()
     dsids = []
     for uuid in sample_uuids:
-        dsid = create_dataset(files=[file], instrument_name=instrument_name,
+        dsid = task_create_dataset(files=[file], instrument_name=instrument_name,
                               project_id=project_id, orcid=orcid,
                               kw_list=kw_list, comments=comments, ingestor=ingestor)
-        link_dataset_and_sample(dsid, uuid)
+        task_link_dataset_and_sample(dsid, uuid)
         logger.info(f"Created dataset {dsid} linked to sample {uuid}")
         _run_post_processing(instrument_name, dsid)
         dsids.append(dsid)
     return dsids
 
 
-@flow(flow_run_name=_run_name("photobox"))
-def photobox_upload(file: str,
+@flow(name="photobox-upload", flow_run_name=_run_name("photobox"))
+def flow_photobox_upload(file: str,
                     carrier_uuid: str,
                     tray1_uuid: str,
                     tray2_uuid: str,
@@ -1144,7 +1144,7 @@ def photobox_upload(file: str,
             client.samples.link(carrier_uuid, tray_uuid)
             logger.info(f"Linked carrier {carrier_uuid} → tray {tray_uuid}")
 
-    new_dsid = create_dataset(files=[file],
+    new_dsid = task_create_dataset(files=[file],
                               instrument_name=instrument_name,
                               project_id=project_id,
                               orcid=orcid,
@@ -1155,7 +1155,7 @@ def photobox_upload(file: str,
                               sample_positions=sample_positions or {})
 
     tray_uuids = [t for t in [tray1_uuid, tray2_uuid] if t]
-    link_dataset_and_sample(new_dsid, [carrier_uuid] + tray_uuids)
+    task_link_dataset_and_sample(new_dsid, [carrier_uuid] + tray_uuids)
     logger.info(f"Linked dataset {new_dsid} to carrier + {len(tray_uuids)} trays")
 
     _run_post_processing(instrument_name, new_dsid)
@@ -1163,8 +1163,8 @@ def photobox_upload(file: str,
     return new_dsid
 
 
-@flow(flow_run_name=_run_name("parent-child"))
-def parent_child_upload(file: str,
+@flow(name="parent-child-upload", flow_run_name=_run_name("parent-child"))
+def flow_parent_child_upload(file: str,
                         parent_sample_uuid: str,
                         child_sample_uuids: list[str],
                         project_id: str,
@@ -1178,11 +1178,11 @@ def parent_child_upload(file: str,
     kw_list = kw_list or []
     child_positions = child_positions or []
 
-    parent_dsid = create_dataset(files=[file], instrument_name=instrument_name,
+    parent_dsid = task_create_dataset(files=[file], instrument_name=instrument_name,
                                  project_id=project_id, orcid=orcid,
                                  kw_list=kw_list, comments=comments, ingestor=ingestor,
                                  mark_as_parent=True)
-    link_dataset_and_sample(parent_dsid, parent_sample_uuid)
+    task_link_dataset_and_sample(parent_dsid, parent_sample_uuid)
     logger.info(f"Created parent dataset {parent_dsid}, linked to {parent_sample_uuid}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1192,31 +1192,41 @@ def parent_child_upload(file: str,
                 child_file = _split_h5_position(file, position, tmpdir)
             else:
                 child_file = file
-            child_dsid = create_dataset(files=[child_file], instrument_name=instrument_name,
+            child_dsid = task_create_dataset(files=[child_file], instrument_name=instrument_name,
                                         project_id=project_id, orcid=orcid,
                                         kw_list=kw_list, comments=comments, ingestor=ingestor,
                                         position=position)
-            link_dataset_and_sample(child_dsid, child_uuid)
-            link_dataset_to_session(child_dsid, parent_dsid)
+            task_link_dataset_and_sample(child_dsid, child_uuid)
+            task_link_dataset_to_session(child_dsid, parent_dsid)
             logger.info(f"Created child dataset {child_dsid}, linked to {child_uuid}, position={position}")
             _run_post_processing(instrument_name, child_dsid)
 
     return parent_dsid
 
 
+@task(retries=2, retry_delay_seconds=5)
+def task_push_local_packet(packet) -> None:
+    from crucible_ingestion import push_packet
+    push_packet(packet, include_file=False)
+
+
+@task(retries=2, retry_delay_seconds=5)
+def task_push_local_file(dsid: str, path: str, ingestion_class: str | None) -> None:
+    from crucible_ingestion import push_file
+    push_file(dsid, path, ingestion_class)
+
+
 # Upload path for datasets the operator previewed and corrected locally. Preview wrote
 # nothing to Crucible, so unless the file's SHA matched a dataset that already exists,
 # this is where the record first appears.
 #
-# datasets.create() (or datasets.update() when the record already exists) writes the
-# record, PATCH-merges the scientific metadata, and only then calls add_file() per file. add_file() requests server-side ingestion, so the
-# ingestors run again on the server. That redundancy is deliberate: it records the
-# ingestion code git hash and ingestor class on each ingestion request, and the re-parse
-# merges beneath the operator's values rather than over them. The jobs are left to run
-# concurrently: files of one dataset do not parse overlapping fields, so they have nothing
-# to race over.
-@flow(flow_run_name=_run_name("preview-upload"))
-def preview_upload(files: list[str],
+# The preview already parsed every file locally, so the merged packet is pushed as-is and
+# each file is uploaded with ingestion skipped. That keeps the server from re-running the
+# ingestors, and makes the local parse — not a second server-side one — the source of the
+# thumbnails, samples and child datasets. Metadata goes first so a failure mid-upload
+# leaves a described record rather than an unlabelled pile of files.
+@flow(name="preview-upload", flow_run_name=_run_name("preview-upload"))
+def flow_preview_upload(files: list[str],
                    dsid: str,
                    instrument_name: str | None = None,
                    project_id: str | None = None,
@@ -1228,31 +1238,31 @@ def preview_upload(files: list[str],
     logger = get_run_logger()
     packet = load_preview_packet(dsid)
 
-    ds_fields = packet.dataset_fields or {}
-    named = {k: (ds_fields.get(k) or None) for k in DATASET_FORM_KEYS}
+    if comments:
+        packet.scientific_metadata['comments'] = comments
 
-    common = dict(
-        files=files,
-        instrument_name=instrument_name,
-        project_id=project_id,
-        orcid=orcid,
-        kw_list=list(packet.keywords or []),
-        comments=comments,
-        ingestor=ingestor or packet.ingestion_class,
-        scientific_metadata=packet.scientific_metadata,
-        dataset_name=named['dataset_name'],
-        measurement=named['measurement'],
-        data_type=named['data_type'],
-        session_name=named['session_name'],
-        wait_for_ingestion=False,
-    )
-    if dataset_exists(dsid):
-        update_dataset(dsid=dsid, **common)
-    else:
-        create_dataset(dsid=dsid, **common)
+    # datasets.update() 409s on any instrument value that isn't the record's current one,
+    # and on any value at all when the record's is null. Instrument is set at creation and
+    # is immutable thereafter.
+    packet.dataset_fields.pop('instrument_name', None)
+    packet.dataset_fields.pop('instrument_id', None)
 
-    link_dataset_and_sample(dsid, sample_unique_id)
-    link_dataset_to_session(dsid, session_dsid)
+    if not dataset_exists(dsid):
+        task_create_dataset(files=[], dsid=dsid, orcid=orcid, project_id=project_id,
+                       instrument_name=instrument_name, wait_for_ingestion=False)
+
+    task_push_local_packet(packet)
+
+    # keyed by filename because that is what parse_for_preview recorded; same-named files
+    # from different folders would collide
+    classes = {f['file']: f['ingestion_class'] for f in
+               (packet.scientific_metadata or {}).get('parse_provenance', {}).get('files', [])}
+    for path in files:
+        task_push_local_file(dsid, path,
+                        classes.get(os.path.basename(path)) or ingestor or packet.ingestion_class)
+
+    task_link_dataset_and_sample(dsid, sample_unique_id)
+    task_link_dataset_to_session(dsid, session_dsid)
     delete_preview_packet(dsid)
     _run_post_processing(instrument_name, dsid)
     logger.info(f"Preview upload complete for {dsid}")

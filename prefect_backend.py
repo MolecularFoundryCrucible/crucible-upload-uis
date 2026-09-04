@@ -31,6 +31,11 @@ try:
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 
+    # otherwise crucible_ingestion lazily builds its own client from local config,
+    # which may point at a different API than the one this UI is talking to
+    import crucible_ingestion
+    crucible_ingestion.set_client(client)
+
 except Exception as e:
     logger.error(f'Client connection failed with error {e}. \
                  You can check your Crucible configuration by \
@@ -600,13 +605,8 @@ def fold_into_packet(packet, parsed, collisions: list, source: str = ''):
 def ingestion_githash() -> str | None:
     """Resolve the commit the ingestion library was installed from, the same way the
     server-side consumer does, so a locally parsed record is traceable to exact code."""
-    from importlib.metadata import distribution
-    try:
-        direct_url = distribution('crucible-ingestion').read_text('direct_url.json')
-        return json.loads(direct_url)['vcs_info']['commit_id']
-    except Exception as err:
-        logger.warning(f'Could not resolve crucible-ingestion githash: {err}')
-        return None
+    from crucible_ingestion.utils import get_ingestion_githash
+    return get_ingestion_githash()
 
 
 def parse_for_preview(files: list[str], dsid: str,
@@ -1204,17 +1204,27 @@ def parent_child_upload(file: str,
     return parent_dsid
 
 
+@task(retries=2, retry_delay_seconds=5)
+def push_local_packet(packet) -> None:
+    from crucible_ingestion import push_packet
+    push_packet(packet, include_file=False)
+
+
+@task(retries=2, retry_delay_seconds=5)
+def push_local_file(dsid: str, path: str, ingestion_class: str | None) -> None:
+    from crucible_ingestion import push_file
+    push_file(dsid, path, ingestion_class)
+
+
 # Upload path for datasets the operator previewed and corrected locally. Preview wrote
 # nothing to Crucible, so unless the file's SHA matched a dataset that already exists,
 # this is where the record first appears.
 #
-# datasets.create() (or datasets.update() when the record already exists) writes the
-# record, PATCH-merges the scientific metadata, and only then calls add_file() per file. add_file() requests server-side ingestion, so the
-# ingestors run again on the server. That redundancy is deliberate: it records the
-# ingestion code git hash and ingestor class on each ingestion request, and the re-parse
-# merges beneath the operator's values rather than over them. The jobs are left to run
-# concurrently: files of one dataset do not parse overlapping fields, so they have nothing
-# to race over.
+# The preview already parsed every file locally, so the merged packet is pushed as-is and
+# each file is uploaded with ingestion skipped. That keeps the server from re-running the
+# ingestors, and makes the local parse — not a second server-side one — the source of the
+# thumbnails, samples and child datasets. Metadata goes first so a failure mid-upload
+# leaves a described record rather than an unlabelled pile of files.
 @flow(flow_run_name=_run_name("preview-upload"))
 def preview_upload(files: list[str],
                    dsid: str,
@@ -1228,28 +1238,28 @@ def preview_upload(files: list[str],
     logger = get_run_logger()
     packet = load_preview_packet(dsid)
 
-    ds_fields = packet.dataset_fields or {}
-    named = {k: (ds_fields.get(k) or None) for k in DATASET_FORM_KEYS}
+    if comments:
+        packet.scientific_metadata['comments'] = comments
 
-    common = dict(
-        files=files,
-        instrument_name=instrument_name,
-        project_id=project_id,
-        orcid=orcid,
-        kw_list=list(packet.keywords or []),
-        comments=comments,
-        ingestor=ingestor or packet.ingestion_class,
-        scientific_metadata=packet.scientific_metadata,
-        dataset_name=named['dataset_name'],
-        measurement=named['measurement'],
-        data_type=named['data_type'],
-        session_name=named['session_name'],
-        wait_for_ingestion=False,
-    )
-    if dataset_exists(dsid):
-        update_dataset(dsid=dsid, **common)
-    else:
-        create_dataset(dsid=dsid, **common)
+    # datasets.update() 409s on any instrument value that isn't the record's current one,
+    # and on any value at all when the record's is null. Instrument is set at creation and
+    # is immutable thereafter.
+    packet.dataset_fields.pop('instrument_name', None)
+    packet.dataset_fields.pop('instrument_id', None)
+
+    if not dataset_exists(dsid):
+        create_dataset(files=[], dsid=dsid, orcid=orcid, project_id=project_id,
+                       instrument_name=instrument_name, wait_for_ingestion=False)
+
+    push_local_packet(packet)
+
+    # keyed by filename because that is what parse_for_preview recorded; same-named files
+    # from different folders would collide
+    classes = {f['file']: f['ingestion_class'] for f in
+               (packet.scientific_metadata or {}).get('parse_provenance', {}).get('files', [])}
+    for path in files:
+        push_local_file(dsid, path,
+                        classes.get(os.path.basename(path)) or ingestor or packet.ingestion_class)
 
     link_dataset_and_sample(dsid, sample_unique_id)
     link_dataset_to_session(dsid, session_dsid)

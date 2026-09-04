@@ -371,8 +371,11 @@ def create_dataset(files: list[str],
             ingestor=ingestor or None,
             wait_for_ingestion_response=wait_for_ingestion,
         )
-    except Exception:
-        if dsid:
+    except Exception as exc:
+        # A 409 means the record was already there, so it is not ours to delete —
+        # a bare record from ensure_dataset_record has no files and would qualify.
+        conflict = getattr(getattr(exc, 'response', None), 'status_code', None) == 409
+        if dsid and not conflict:
             try:
                 associated = client.datasets.list_files(dsid)
                 if not any(f.get('storage_path') for f in associated):
@@ -885,15 +888,30 @@ def upload_dataset(files: list,
                    kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    new_ds_dsid = create_dataset(files=files,
-                                 instrument_name=instrument_name,
-                                 project_id=project_id,
-                                 orcid=orcid,
-                                 session_name=session_name,
-                                 dsid=dsid,
-                                 kw_list=kw_list,
-                                 comments=comments,
-                                 ingestor=ingestor)
+    # A dsid that came back from a SHA match already has a record, and POSTing it
+    # again 409s. wait_for_ingestion is passed explicitly because review mode polls
+    # this run to a terminal state and then reads the record back to correct it.
+    if dsid and dataset_exists(dsid):
+        new_ds_dsid = update_dataset(files=files,
+                                     dsid=dsid,
+                                     instrument_name=instrument_name,
+                                     project_id=project_id,
+                                     orcid=orcid,
+                                     session_name=session_name,
+                                     kw_list=kw_list,
+                                     comments=comments,
+                                     ingestor=ingestor,
+                                     wait_for_ingestion=True)
+    else:
+        new_ds_dsid = create_dataset(files=files,
+                                     instrument_name=instrument_name,
+                                     project_id=project_id,
+                                     orcid=orcid,
+                                     session_name=session_name,
+                                     dsid=dsid,
+                                     kw_list=kw_list,
+                                     comments=comments,
+                                     ingestor=ingestor)
 
     link_dataset_to_session(new_ds_dsid, session_dsid)
     link_dataset_and_sample(new_ds_dsid, sample_unique_id)
@@ -1216,7 +1234,44 @@ def push_preview_file(dsid: str,
     return dsid
 
 
-# Review mode has no flow of its own: it is an ordinary upload_dataset run, which the
-# browser waits on before asking for the stored record to correct. create_dataset defaults
-# to wait_for_ingestion=True, so the run is not complete until the server has parsed
-# everything and there is something to review.
+# Review mode: the whole selection parsed and pushed in one run, then offered for
+# correction. Same local-parse-and-push as preview, but without a browser round trip per
+# file — nothing is shown until every file has landed, so the form can be built from the
+# finished record.
+#
+# The loop is sequential for the reason given above push_preview_file: each parse reads
+# the record back, so push N must land before parse N+1.
+@flow(flow_run_name=_run_name("review-upload"))
+def review_upload(files: list[str],
+                  dsid: str,
+                  instrument_name: str | None = None,
+                  project_id: str | None = None,
+                  orcid: str | None = None,
+                  sample_unique_id: str | list[str] | None = None,
+                  session_dsid: str | None = None,
+                  kw_list: list[str] | None = None,
+                  comments: str | None = None,
+                  ingestor: str | None = None) -> str:
+    from crucible_ingestion.data_ingestion import push_packet
+    logger = get_run_logger()
+
+    ensure_dataset_record(dsid, orcid, project_id, instrument_name)
+
+    for path in files:
+        packet, parsed = parse_one_file(path, dsid, ingestor or '')
+        if not parsed:
+            logger.warning(f"Nothing extracted from {os.path.basename(path)}; uploading anyway")
+        # The form's comments and keywords reach the record the same way preview's do:
+        # written onto the packet, with a parsed value winning over the operator's.
+        if comments:
+            packet.scientific_metadata.setdefault('comments', comments)
+        if kw_list:
+            packet.keywords = _dedup(list(packet.keywords) + list(kw_list))
+        push_packet(packet, include_file=True)
+        logger.info(f"Pushed {os.path.basename(path)} into {dsid}")
+
+    link_dataset_and_sample(dsid, sample_unique_id)
+    link_dataset_to_session(dsid, session_dsid)
+    _run_post_processing(instrument_name, dsid)
+    logger.info(f"Review upload complete for {dsid}")
+    return dsid

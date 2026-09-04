@@ -1676,12 +1676,12 @@
       }
     }
 
-    // Review: an ordinary upload, then the stored record offered for correction. The flow
-    // waits on server-side ingestion, so once it is complete there is something to review.
+    // Review: one flow parses and pushes every file, then the stored record is offered for
+    // correction. No round trip per file — the form opens once the run is complete.
     async function startReviewRequest(params) {
       setSpinner("upload", true);
       document.getElementById("btn-upload").disabled = true;
-      const body = { ...params };
+      const body = { ...params, review: true };
       if (_selectedSessionDsid !== null) body.session_dsid = _selectedSessionDsid;
       try {
         showStatus("Uploading… the form to add missing information opens once every file has landed.", "info");

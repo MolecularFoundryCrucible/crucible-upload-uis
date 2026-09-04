@@ -562,6 +562,37 @@ def do_upload():
 
     from prefect.deployments import run_deployment
 
+    # Review mode is non-session only. The dsid is resolved here rather than in the flow so
+    # the browser has it while the run is still going.
+    if data.get("review"):
+        try:
+            valid_dsids = backend.existing_dsids(orcid, project_id)
+            dsid, _ = backend.resolve_dsid_for_file(session_folder_paths[0], valid_dsids)
+            flow_run = run_deployment(
+                "review-upload/review-upload",
+                parameters={
+                    "files": session_folder_paths,
+                    "dsid": dsid,
+                    "instrument_name": instrument_name,
+                    "project_id": project_id,
+                    "orcid": orcid,
+                    "sample_unique_id": sample_unique_id,
+                    "session_dsid": session_dsid,
+                    "kw_list": kw_list,
+                    "comments": comments,
+                    "ingestor": ingestor,
+                },
+                timeout=0,
+            )
+        except Exception as e:
+            backend.logger.error(e)
+            return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "flow_run_id": str(flow_run.id),
+            "project_id": project_id,
+            "dsid": dsid,
+        })
+
     if is_session:
         # Session mode — existing behavior. Create parent session record sync so
         # the UI can show the Crucible link + QR before the flow runs.

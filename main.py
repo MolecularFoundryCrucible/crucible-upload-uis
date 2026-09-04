@@ -140,7 +140,6 @@ EDITABLE_FIELDS = {
     "DEFAULT_INGESTOR": "str",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
-    "ACCEPTABLE_FILE_TYPES": "set_str",
 }
 
 

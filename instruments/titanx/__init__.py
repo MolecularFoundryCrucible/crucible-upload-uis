@@ -4,6 +4,7 @@ UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
 IS_SESSION = True
+ACCEPTABLE_FILE_TYPES = {'.bcf', '.bmp', '.csv', '.dm3', '.dm4', '.emd', '.h5', '.jpeg', '.mrc', '.mtd', '.png', '.ser', '.tif', '.txt', '.xls'}
 FLOW = 'session-upload/session-upload'
 POST_PROCESSING = []
 PANEL_TEMPLATE = None

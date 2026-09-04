@@ -450,15 +450,6 @@
             <option value="">(none — use instrument default)</option>
           </select>
 
-          <!-- Acceptable file types -->
-          <label class="form-label fw-semibold">Acceptable file types</label>
-          <div id="cfg-filetypes" class="d-flex flex-wrap gap-1 mb-2"></div>
-          <div class="input-group input-group-sm mb-3" style="max-width: 320px;">
-            <input id="cfg-filetype-input" type="text" class="form-control" placeholder="Add extension e.g. .emd"
-                   onkeydown="if(event.key==='Enter'){event.preventDefault(); addFileTypeChip()}" />
-            <button class="btn btn-outline-secondary" type="button" onclick="addFileTypeChip()">+</button>
-          </div>
-
           <!-- Toggles -->
           <div class="form-check form-switch mb-2">
             <input class="form-check-input" type="checkbox" id="cfg-chain-postproc" />
@@ -470,7 +461,7 @@
           </div>
 
           <div class="alert alert-warning small mb-0 mt-3">
-            Note: <code>CHAIN_POST_PROCESSING</code> and <code>ACCEPTABLE_FILE_TYPES</code> are read by the Prefect worker process — restart the worker for those to take effect.
+            Note: <code>CHAIN_POST_PROCESSING</code> is read by the Prefect worker process — restart the worker for that to take effect.
           </div>
 
           <div id="cfg-error" class="alert alert-danger d-none mt-3 mb-0"></div>
@@ -2016,7 +2007,6 @@
     // Instrument config editor
     // -------------------------------------------------------------------------
     let configModal = null;
-    const cfgState = { fileTypes: [] };
 
     async function openConfig() {
       document.getElementById("cfg-error").classList.add("d-none");
@@ -2029,8 +2019,6 @@
         document.getElementById("cfg-browse-dir").value = c.DEFAULT_BROWSE_DIR || "";
         document.getElementById("cfg-chain-postproc").checked = !!c.CHAIN_POST_PROCESSING;
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
-        cfgState.fileTypes = [...(c.ACCEPTABLE_FILE_TYPES || [])];
-        renderFileTypeChips();
 
         const defSel = document.getElementById("cfg-default-instrument");
         if (c.DEFAULT_INSTRUMENT_NAME) defSel.value = c.DEFAULT_INSTRUMENT_NAME;
@@ -2049,38 +2037,6 @@
       }
     }
 
-    function chip(label, onRemove) {
-      const span = document.createElement("span");
-      span.className = "badge bg-secondary d-inline-flex align-items-center gap-1";
-      span.textContent = label;
-      const x = document.createElement("button");
-      x.type = "button";
-      x.className = "btn-close btn-close-white";
-      x.style.fontSize = "0.6rem";
-      x.onclick = onRemove;
-      span.appendChild(x);
-      return span;
-    }
-
-    function renderFileTypeChips() {
-      const box = document.getElementById("cfg-filetypes");
-      box.innerHTML = "";
-      cfgState.fileTypes.forEach((ext, i) => {
-        box.appendChild(chip(ext, () => { cfgState.fileTypes.splice(i, 1); renderFileTypeChips(); }));
-      });
-    }
-
-    function addFileTypeChip() {
-      const input = document.getElementById("cfg-filetype-input");
-      let val = input.value.trim();
-      if (val && !val.startsWith(".")) val = "." + val;
-      if (val && !cfgState.fileTypes.includes(val)) {
-        cfgState.fileTypes.push(val);
-        renderFileTypeChips();
-      }
-      input.value = "";
-    }
-
     async function saveConfig() {
       const errBox = document.getElementById("cfg-error");
       errBox.classList.add("d-none");
@@ -2090,7 +2046,6 @@
         DEFAULT_BROWSE_DIR: document.getElementById("cfg-browse-dir").value.trim(),
         DEFAULT_INSTRUMENT_NAME: document.getElementById("cfg-default-instrument").value,
         DEFAULT_INGESTOR: document.getElementById("cfg-default-ingestor").value,
-        ACCEPTABLE_FILE_TYPES: cfgState.fileTypes,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
       };

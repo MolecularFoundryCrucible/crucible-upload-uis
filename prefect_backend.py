@@ -302,12 +302,16 @@ def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None
 
 
 @task
-def task_identify_session_files(session_folder_path: str) -> list[str]:
-    from instrument_conf import ACCEPTABLE_FILE_TYPES
+def task_identify_session_files(session_folder_path: str, instrument_name: str) -> list[str]:
+    from instruments.registry import INSTRUMENT_FILE_TYPES
+    file_types = INSTRUMENT_FILE_TYPES.get(instrument_name)
+    if not file_types:
+        raise ValueError(f"ACCEPTABLE_FILE_TYPES must be declared in instruments/{instrument_name}/__init__.py "
+                          f"before session mode can be used")
     max_size = 20 * 1024 ** 3  # 20 GiB
     return [
         str(f) for f in Path(session_folder_path).rglob("*") if f.is_file()
-        and f.suffix.lower() in ACCEPTABLE_FILE_TYPES
+        and f.suffix.lower() in file_types
         and f.stat().st_size < max_size
     ]
 
@@ -951,7 +955,7 @@ def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid:
 
     # returns list of files in folder path that are less than 20GB
     # with an accepted file type
-    session_files = task_identify_session_files(session_folder_path)
+    session_files = task_identify_session_files(session_folder_path, instrument_name)
     logger.info(f'{session_files=}')
 
     valid_dsids = child_dsids(session_dsid)

@@ -1,0 +1,10 @@
+NAME = 'spinbot_spinrun'
+INGESTOR = 'SpinRunIngestor'
+UI_MODE = 'standard'
+HOLDER_LAYOUTS = {}
+DEFAULT_HOLDER_LAYOUT = ''
+ACCEPTABLE_FILE_TYPES = {'.h5', '.yaml'}
+FLOW = None
+POST_PROCESSING = []
+PANEL_TEMPLATE = 'instruments/spinbot_spinrun/panel.html'
+FILE_PARSER = None

@@ -1109,14 +1109,22 @@
       if (state.isSession) {
         uploadParams.session_folder_path = state.selectedPaths[0];
       } else {
-        uploadParams.session_folder_paths = state.selectedPaths;
-        // Session mode already has folder-level grouping semantics, so only ask here.
-        if (state.selectedPaths.length > 1) {
-          askGrouping(asOne => {
-            uploadParams.group_as_one = asOne;
-            startUploadRequest(uploadParams);
-          });
-          return;
+        // A panel can contribute extra companion files (e.g. spinbot_spinrun's optional
+        // .yaml) that always belong in the same dataset as the browsed file(s).
+        const extraFiles = (window._instrumentExtraFiles || {})[instrument_name]?.() || [];
+        if (extraFiles.length) {
+          uploadParams.session_folder_paths = [...state.selectedPaths, ...extraFiles];
+          uploadParams.group_as_one = true;
+        } else {
+          uploadParams.session_folder_paths = state.selectedPaths;
+          // Session mode already has folder-level grouping semantics, so only ask here.
+          if (state.selectedPaths.length > 1) {
+            askGrouping(asOne => {
+              uploadParams.group_as_one = asOne;
+              startUploadRequest(uploadParams);
+            });
+            return;
+          }
         }
       }
 
@@ -1601,7 +1609,13 @@
       // Hide all per-instrument panels
       document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
 
-      document.getElementById("sample-info-card").classList.toggle("d-none", isMultiAssignment || isPhotobox);
+      // Any instrument with a registered panel (multi_assignment, photobox, or a plain
+      // 'standard' instrument like spinbot_spinrun) replaces Sample Info with its own panel.
+      const panel = document.getElementById(`panel-${instrument}`);
+      const hasPanel = !!panel;
+      if (panel) panel.classList.remove('d-none');
+
+      document.getElementById("sample-info-card").classList.toggle("d-none", hasPanel);
       document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox || isPreview);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
@@ -1611,10 +1625,6 @@
         _clearNirvanaUI();
         return;
       }
-
-      // Show this instrument's panel
-      const panel = document.getElementById(`panel-${instrument}`);
-      if (panel) panel.classList.remove('d-none');
 
       if (isPhotobox) return;
 

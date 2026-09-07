@@ -1,5 +1,7 @@
 NAME = 'spinbot_photobox'
 INGESTOR = ''
+INSTRUMENT_ID = 'photobox'
+INSTRUMENT_MFID = '0t4ptyzswnyps0006tqctfjbpr'
 UI_MODE = 'photobox'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

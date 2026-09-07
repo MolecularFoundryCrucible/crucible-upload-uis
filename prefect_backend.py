@@ -180,6 +180,11 @@ def get_emi_file_name(serfile: str) -> str:
 def instrument_id_from_name(instrument_name: str | None) -> str | None:
     if not instrument_name:
         return None
+    from instruments.registry import INSTRUMENT_MFIDS, INSTRUMENT_IDS
+    if instrument_name in INSTRUMENT_MFIDS:
+        return INSTRUMENT_MFIDS[instrument_name]
+    if instrument_name in INSTRUMENT_IDS:
+        return INSTRUMENT_IDS[instrument_name]
     return re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
 
 

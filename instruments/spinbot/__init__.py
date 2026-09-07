@@ -1,5 +1,7 @@
 NAME = 'spinbot'
 INGESTOR = ''
+INSTRUMENT_ID = 'spinbot'
+INSTRUMENT_MFID = '0sh6zrzxhxsa100089bznryq88'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

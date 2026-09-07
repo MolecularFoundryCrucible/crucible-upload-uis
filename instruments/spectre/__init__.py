@@ -1,5 +1,7 @@
 NAME = 'spectre'
 INGESTOR = ''
+INSTRUMENT_ID = 'spectre'
+INSTRUMENT_MFID = '0tf06pwcg9ymf00014jzj3rzs8'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

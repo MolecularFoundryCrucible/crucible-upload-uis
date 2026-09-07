@@ -1,5 +1,5 @@
 NAME = 'spinbot_spinrun'
-INGESTOR = 'SpinRunIngestor'
+INGESTOR = 'SpinbotSpinRunIngestor'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

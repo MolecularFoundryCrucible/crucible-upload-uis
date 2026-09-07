@@ -1,5 +1,7 @@
 NAME = 'm3_microscope'
 INGESTOR = ''
+INSTRUMENT_ID = 'm3-microscope'
+INSTRUMENT_MFID = '0tmz7kb6qdwfs000cyevpp43vc'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

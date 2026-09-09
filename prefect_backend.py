@@ -177,15 +177,16 @@ def get_emi_file_name(serfile: str) -> str:
     no_rep = re.sub('_[0-9]*$', '', no_ext)
     return f"{no_rep}.emi"
 
-def instrument_id_from_name(instrument_name: str | None) -> str | None:
+def instrument_ids_from_name(instrument_name: str | None) -> tuple[str | None, str | None]:
+    """Returns (instrument_id, instrument_mfid) for the given instrument config name."""
     if not instrument_name:
-        return None
+        return None, None
     from instruments.registry import INSTRUMENT_MFIDS, INSTRUMENT_IDS
-    if instrument_name in INSTRUMENT_MFIDS:
-        return INSTRUMENT_MFIDS[instrument_name]
-    if instrument_name in INSTRUMENT_IDS:
-        return INSTRUMENT_IDS[instrument_name]
-    return re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
+    mfid = INSTRUMENT_MFIDS.get(instrument_name)
+    instrument_id = INSTRUMENT_IDS.get(instrument_name)
+    if instrument_id is None and mfid is None:
+        instrument_id = re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
+    return instrument_id, mfid
 
 
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
@@ -220,10 +221,12 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
     if session_dsid is not None and session_dsid != "new":
         use_session_dsid = session_dsid
     else:
+        instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
         session_ds = BaseDataset(dataset_name=dsname,
                                 owner_orcid=orcid,
                                 project_id=project_id,
-                                instrument_id=instrument_id_from_name(instrument_name),
+                                instrument_id=instrument_id,
+                                instrument_mfid=instrument_mfid,
                                 measurement=f'full {instrument_name} session',
                                 session_name=session_name)
 
@@ -354,11 +357,13 @@ def task_create_dataset(files: list[str],
     logger = get_run_logger()
     kw_list = kw_list or []
 
+    instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
     ds_kwargs = {k: v for k, v in dict(
         unique_id=dsid,
         owner_orcid=orcid,
         project_id=project_id,
-        instrument_id=instrument_id_from_name(instrument_name),
+        instrument_id=instrument_id,
+        instrument_mfid=instrument_mfid,
         session_name=session_name,
         dataset_name=dataset_name,
         measurement=measurement,
@@ -427,9 +432,11 @@ def task_update_dataset(files: list[str],
     # Ownership, project and instrument belong to the record that already exists; the form
     # only says where this upload came from, so it must not reassign them.
     existing = client.datasets.get(dsid)
+    instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
     for field, value in (('owner_orcid', orcid),
                          ('project_id', project_id),
-                         ('instrument_id', instrument_id_from_name(instrument_name))):
+                         ('instrument_id', instrument_id),
+                         ('instrument_mfid', instrument_mfid)):
         if value and existing.get(field) and existing[field] != value:
             logger.warning(f"{dsid} has {field}={existing[field]!r}; leaving it as is "
                            f"rather than overwriting with {value!r}")

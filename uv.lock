@@ -1664,8 +1664,8 @@ wheels = [
 
 [[package]]
 name = "nano-crucible"
-version = "3.2.0"
-source = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=dev#fdbe7d31813f81e516e9347432d7bac9c37091ea" }
+version = "3.2.1"
+source = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=dev#eb0954684b8e7b9348953b2d5dfac21a6a3e407f" }
 dependencies = [
     { name = "argcomplete" },
     { name = "configupdater" },

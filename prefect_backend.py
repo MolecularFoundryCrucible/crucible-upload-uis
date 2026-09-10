@@ -284,18 +284,33 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
     return mfid.mfid()[0], False
 
 
+# (group_path, attr_name) pairs to check in order; group_path=None means root attrs.
+_H5_DSID_ATTRS = [
+    ('measurement/spin_run/settings', 'run_id'),  # SpinBot assigns its own mfid as run_id
+    (None, 'unique_id'),
+]
+
+
 def read_h5_dsid(file_path: str) -> str | None:
-    """Return the Crucible dataset ID embedded in an h5 file's root attrs, or None."""
+    """Return the Crucible dataset ID embedded in an h5 file's attrs, or None.
+
+    Checks instrument-specific nested paths first, then falls back to the root
+    'unique_id' attr.
+    """
     if not file_path.endswith('.h5'):
         return None
     try:
         with h5py.File(file_path, 'r') as f:
-            uid = f.attrs.get('unique_id')
-            if uid is None:
-                return None
-            return uid.decode() if isinstance(uid, bytes) else str(uid)
+            for group_path, attr_name in _H5_DSID_ATTRS:
+                node = f if group_path is None else f.get(group_path)
+                if node is None:
+                    continue
+                uid = node.attrs.get(attr_name)
+                if uid is not None:
+                    return uid.decode() if isinstance(uid, bytes) else str(uid)
     except Exception:
         return None
+    return None
 
 
 def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None,

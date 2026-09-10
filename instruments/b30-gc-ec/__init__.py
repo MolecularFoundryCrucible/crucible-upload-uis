@@ -1,5 +1,7 @@
 NAME = 'gc-b30-001'
 INGESTOR = ''
+INSTRUMENT_ID = 'gc-b30-001'
+INSTRUMENT_MFID = '0tmfg17radzgf000w544pxmwer'
 UI_MODE = 'preview'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

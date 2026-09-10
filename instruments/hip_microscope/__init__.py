@@ -1,5 +1,7 @@
 NAME = 'hip_microscope'
 INGESTOR = 'SingleSpecScopeFoundryH5Ingestor'
+INSTRUMENT_ID = 'hip-microscope'
+INSTRUMENT_MFID = '0sh6zrzxhxybd000wwyrkcn2cw'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

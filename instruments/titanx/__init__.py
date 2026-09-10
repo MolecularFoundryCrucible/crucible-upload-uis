@@ -1,5 +1,7 @@
 NAME = 'titanx'
 INGESTOR = ''
+INSTRUMENT_ID = 'titanx'
+INSTRUMENT_MFID = '0sh6zrzxhnz8k000k7pwq0s2t8'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

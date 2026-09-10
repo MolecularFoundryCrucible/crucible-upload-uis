@@ -1,5 +1,7 @@
 NAME = 'insitu_pl'
 INGESTOR = ''
+INSTRUMENT_ID = 'in-situ-pl'
+INSTRUMENT_MFID = '0t0nah22xxxjd000gy940mm9d8'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

@@ -1,5 +1,7 @@
 NAME = 'dfs_microscope'
 INGESTOR = 'SingleSpecScopeFoundryH5Ingestor'
+INSTRUMENT_ID = 'dfs-microscope'
+INSTRUMENT_MFID = '0tmz428dmnrf3000128mhfcmdg'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

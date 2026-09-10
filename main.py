@@ -394,7 +394,11 @@ def do_preview():
     # preview from leaving a stale empty dataset.
     try:
         valid = backend.existing_dsids(orcid, project_id)
-        dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
+        dsid = backend.read_h5_dsid(files[0])
+        if dsid:
+            reused = dsid in valid
+        else:
+            dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
         packet, collisions, parsed_by, skipped = backend.parse_for_preview(files, dsid, ingestor)
     except Exception as e:
         backend.logger.exception("preview failed")
@@ -588,7 +592,9 @@ def do_upload():
         paths = session_folder_paths
         try:
             valid_dsids = backend.existing_dsids(orcid, project_id)
-            dsid, _ = backend.resolve_dsid_for_file(paths[0], valid_dsids)
+            dsid = backend.read_h5_dsid(paths[0])
+            if not dsid:
+                dsid, _ = backend.resolve_dsid_for_file(paths[0], valid_dsids)
             flow_run = run_deployment(
                 "upload-dataset/upload-dataset",
                 parameters={

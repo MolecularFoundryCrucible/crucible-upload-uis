@@ -1,5 +1,7 @@
 NAME = 'team05'
 INGESTOR = ''
+INSTRUMENT_ID = 'team05'
+INSTRUMENT_MFID = '0szb5en16nxdk000dcd8a1wt2w'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

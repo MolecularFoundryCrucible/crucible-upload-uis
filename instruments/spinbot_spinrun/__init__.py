@@ -1,11 +1,12 @@
-NAME = 'spinbot'
-INGESTOR = ''
+NAME = 'spinbot_spinrun'
+INGESTOR = 'SpinbotSpinRunIngestor'
 INSTRUMENT_ID = 'spinbot'
 INSTRUMENT_MFID = '0sh6zrzxhxsa100089bznryq88'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
+ACCEPTABLE_FILE_TYPES = {'.h5', '.yaml'}
 FLOW = None
 POST_PROCESSING = []
-PANEL_TEMPLATE = None
+PANEL_TEMPLATE = 'instruments/spinbot_spinrun/panel.html'
 FILE_PARSER = None

@@ -1,5 +1,7 @@
 NAME = 'themis'
 INGESTOR = ''
+INSTRUMENT_ID = 'themis'
+INSTRUMENT_MFID = '0t6k7ms7r5zak000bwynwcfacr'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

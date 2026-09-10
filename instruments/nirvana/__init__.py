@@ -2,6 +2,8 @@ import h5py
 
 NAME = 'nirvana'
 INGESTOR = 'NirvanaMultiPosLineScanIngestor'
+INSTRUMENT_ID = 'nirvana-spectrometer'
+INSTRUMENT_MFID = '0t8vneqh81rbz000b41bdw6adw'
 UI_MODE = 'multi_assignment'
 HOLDER_LAYOUTS = {
     'Tray 2×8': [

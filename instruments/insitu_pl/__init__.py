@@ -1,5 +1,5 @@
 NAME = 'insitu_pl'
-INGESTOR = ''
+INGESTOR = 'InSituPlIngestor'
 INSTRUMENT_ID = 'in-situ-pl'
 INSTRUMENT_MFID = '0t0nah22xxxjd000gy940mm9d8'
 UI_MODE = 'standard'

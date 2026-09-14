@@ -101,12 +101,17 @@ def get_instruments():
         # that now instead of letting the user do work that can't complete.
         return jsonify({"instruments": [], "labels": {}, "error": str(e)})
 
-    instruments = []
-    labels = {}
+    rows = []
     for inst in live:
-        value = mfid_to_name.get(inst.get('unique_id'), inst.get('unique_id'))
-        instruments.append(value)
-        labels[value] = f"{inst.get('instrument_name') or value} ({inst.get('instrument_id')})"
+        local_name = mfid_to_name.get(inst.get('unique_id'))
+        value = local_name or inst.get('unique_id')
+        instrument_id = inst.get('instrument_id') or value
+        suffix = local_name if local_name else "no uploader registered"
+        rows.append((instrument_id, value, f"{instrument_id} ({suffix})"))
+    rows.sort(key=lambda r: r[0].lower())
+
+    instruments = [value for _, value, _ in rows]
+    labels = {value: label for _, value, label in rows}
 
     return jsonify({
         "instruments": instruments,

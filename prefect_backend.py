@@ -185,8 +185,19 @@ def instrument_ids_from_name(instrument_name: str | None) -> tuple[str | None, s
     mfid = INSTRUMENT_MFIDS.get(instrument_name)
     instrument_id = INSTRUMENT_IDS.get(instrument_name)
     if instrument_id is None and mfid is None:
-        instrument_id = re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
+        # Not a local registry NAME — may be a live Crucible instrument (mfid or slug)
+        # selected from the dropdown for an instrument with no local schema.
+        try:
+            found = client.instruments.get(instrument_ref=instrument_name)
+            return found.get('instrument_id'), found.get('unique_id')
+        except Exception:
+            instrument_id = re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
     return instrument_id, mfid
+
+
+def list_active_instruments() -> list[dict]:
+    """Live instrument list from Crucible, for the instrument dropdown."""
+    return client.instruments.list(status='active', limit=500)
 
 
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
@@ -289,6 +300,37 @@ _H5_DSID_ATTRS = [
     ('measurement/spin_run/settings', 'run_id'),  # SpinBot assigns its own mfid as run_id
     (None, 'unique_id'),
 ]
+
+
+def read_h5_project_id(file_path: str) -> str | None:
+    """Return the project_id embedded in a ScopeFoundry h5 file's settings, or None.
+
+    Checks every hardware/<component>/settings group for a 'proposal' or 'project' attr
+    (the two names in use across instrument-specific ScopeFoundry apps) rather than a
+    fixed list of known component names, so new instruments following the same
+    convention are picked up without a code change here. Mirrors the same lookup +
+    `value.split(' ')[0]` parsing crucible-ingestion's parse_project_id() applies, so this
+    predicts what the ingestor will actually use.
+    """
+    if not file_path.endswith('.h5'):
+        return None
+    try:
+        with h5py.File(file_path, 'r') as f:
+            hardware = f.get('hardware')
+            if hardware is None:
+                return None
+            for component in hardware:
+                settings = hardware[component].get('settings') if hasattr(hardware[component], 'get') else None
+                if settings is None:
+                    continue
+                for attr_name in ('proposal', 'project'):
+                    val = settings.attrs.get(attr_name)
+                    if val is not None:
+                        val = val.decode() if isinstance(val, bytes) else str(val)
+                        return val.split(' ')[0]
+    except Exception:
+        return None
+    return None
 
 
 def read_h5_dsid(file_path: str) -> str | None:

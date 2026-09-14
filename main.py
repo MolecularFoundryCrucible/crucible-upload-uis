@@ -87,8 +87,35 @@ def index():
 
 @app.get("/api/instruments")
 def get_instruments():
+    # Local registry NAMEs whose INSTRUMENT_MFID matches a live Crucible instrument get
+    # their custom pipeline (ui_mode, panel, ingestor, etc.); everything else on the
+    # platform is still selectable and falls back to plain upload.
+    mfid_to_name = {mfid: name for name, mfid in registry.INSTRUMENT_MFIDS.items()}
+
+    try:
+        live = backend.list_active_instruments()
+    except Exception as e:
+        backend.logger.warning(f"instrument list API call failed: {e}")
+        # Fail loudly (empty list) rather than falling back to the static registry —
+        # if the Crucible API is unreachable, uploads won't work either, so surface
+        # that now instead of letting the user do work that can't complete.
+        return jsonify({"instruments": [], "labels": {}, "error": str(e)})
+
+    rows = []
+    for inst in live:
+        local_name = mfid_to_name.get(inst.get('unique_id'))
+        value = local_name or inst.get('unique_id')
+        instrument_id = inst.get('instrument_id') or value
+        suffix = local_name if local_name else "no uploader registered"
+        rows.append((instrument_id, value, f"{instrument_id} ({suffix})"))
+    rows.sort(key=lambda r: r[0].lower())
+
+    instruments = [value for _, value, _ in rows]
+    labels = {value: label for _, value, label in rows}
+
     return jsonify({
-        "instruments": registry.INSTRUMENTS,
+        "instruments": instruments,
+        "labels": labels,
         "default": conf.DEFAULT_INSTRUMENT_NAME,
         "default_ingestor": conf.DEFAULT_INGESTOR,
         "is_session": conf.IS_SESSION,
@@ -98,6 +125,19 @@ def get_instruments():
         "default_ingestors": registry.INSTRUMENT_INGESTORS,
         "instrument_session_modes": registry.INSTRUMENT_SESSION_MODES,
     })
+
+
+@app.get("/api/embedded_project")
+def get_embedded_project():
+    file_path = request.args.get("file", "")
+    if not file_path:
+        return jsonify({"project_id": None})
+    try:
+        project_id = backend.read_h5_project_id(file_path)
+    except Exception as e:
+        backend.logger.warning(f"read_h5_project_id failed for {file_path}: {e}")
+        project_id = None
+    return jsonify({"project_id": project_id})
 
 
 @app.get("/api/ingestors")

@@ -146,6 +146,7 @@
             <select id="project" class="form-select mb-3" disabled>
               <option value="">Look up a user first</option>
             </select>
+            <div id="project-lock-note" class="small mb-3 d-none"></div>
 
             <!-- Instrument -->
             <label class="form-label fw-semibold">Instrument</label>
@@ -582,14 +583,18 @@
       const res = await fetch("/api/instruments");
       const data = await res.json();
       const sel = document.getElementById("instrument");
+      const labels = data.labels || {};
       data.instruments.forEach(name => {
         const opt = document.createElement("option");
         opt.value = name;
-        opt.textContent = name;
+        opt.textContent = labels[name] || name;
         sel.appendChild(opt);
       });
       if (data.default) {
         sel.value = data.default;
+      }
+      if (data.error) {
+        showStatus("Failed to load instruments from Crucible: " + data.error, "danger");
       }
 
       state.isSession = !!data.is_session;
@@ -977,6 +982,7 @@
         if (state.uiModes[instr] === 'multi_assignment') {
           parseAssignmentFiles(instr, state.selectedPaths);
         }
+        checkEmbeddedProject(state.selectedPaths[0]);
       } catch (e) {
         showStatus("Browse failed: " + e.message, "danger");
       }
@@ -988,6 +994,62 @@
       _clearNirvanaUI();
       // Also clear holder UUID inputs
       document.querySelectorAll(".ma-holder-uuid").forEach(el => el.value = "");
+      unlockProjectDropdown();
+    }
+
+    // ── Project lock (file-embedded project_id) ──────────────────────────────
+    // Some file formats (e.g. ScopeFoundry h5) carry their own project_id, which the
+    // ingestor uses in preference to whatever project is selected here. Locking the
+    // dropdown when we detect one makes that explicit instead of letting the user
+    // believe their selection will be honored.
+    async function checkEmbeddedProject(path) {
+      if (!path || !path.endsWith('.h5')) {
+        unlockProjectDropdown();
+        return;
+      }
+      try {
+        const res = await fetch("/api/embedded_project?file=" + encodeURIComponent(path));
+        const data = await res.json();
+        if (data.project_id) {
+          lockProjectToEmbedded(data.project_id);
+        } else {
+          unlockProjectDropdown();
+        }
+      } catch (e) {
+        unlockProjectDropdown();
+      }
+    }
+
+    function lockProjectToEmbedded(projectId) {
+      const sel = document.getElementById("project");
+      const note = document.getElementById("project-lock-note");
+      const match = (state.projects || []).find(p => p.project_id === projectId);
+      if (match) {
+        populateProjects(state.projects);
+        sel.value = projectId;
+        note.className = "small mb-3 text-muted";
+        note.textContent = "Project is set by this file's metadata and can't be changed here.";
+      } else {
+        sel.innerHTML = "";
+        const opt = document.createElement("option");
+        opt.value = projectId;
+        opt.textContent = projectId;
+        sel.appendChild(opt);
+        note.className = "small mb-3 text-warning";
+        note.textContent = `⚠ This file specifies project "${projectId}", which isn't in your accessible projects. The upload may still use it.`;
+      }
+      sel.disabled = true;
+      state.projectLocked = true;
+      note.classList.remove("d-none");
+    }
+
+    function unlockProjectDropdown() {
+      if (!state.projectLocked) return;
+      state.projectLocked = false;
+      populateProjects(state.projects || []);
+      const note = document.getElementById("project-lock-note");
+      note.classList.add("d-none");
+      note.textContent = "";
     }
 
     // -------------------------------------------------------------------------

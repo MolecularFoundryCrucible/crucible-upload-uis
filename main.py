@@ -43,7 +43,7 @@ def _check_browse_queue():
     Always returns a list of paths via _browse_result so the API has a uniform shape.
     """
     try:
-        _browse_request.get_nowait()
+        instrument_name = _browse_request.get_nowait()
     except queue.Empty:
         _tk_root.after(50, _check_browse_queue)
         return
@@ -51,7 +51,8 @@ def _check_browse_queue():
         # Realize/flush the root so the dialog reliably comes to front on macOS,
         # where the first invocation otherwise returns empty.
         _tk_root.update()
-        if conf.IS_SESSION:
+        is_session = registry.INSTRUMENT_SESSION_MODES.get(instrument_name, conf.IS_SESSION)
+        if is_session:
             kwargs = {"master": _tk_root, "title": "Select session folder"}
             if conf.DEFAULT_BROWSE_DIR:
                 kwargs["initialdir"] = conf.DEFAULT_BROWSE_DIR
@@ -154,10 +155,11 @@ def get_ingestors():
 def browse():
     # One dialog at a time. Drain any leftover request/result from a prior call
     # (e.g. a dialog the user abandoned) so we never return a stale selection.
+    instrument_name = request.args.get("instrument", "")
     with _browse_lock:
         _drain(_browse_request)
         _drain(_browse_result)
-        _browse_request.put(True)
+        _browse_request.put(instrument_name)
         try:
             paths = _browse_result.get(timeout=300)
         except queue.Empty:

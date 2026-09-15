@@ -974,13 +974,13 @@
 
     async function browseFolder() {
       try {
-        const res = await fetch("/api/browse");
+        const instrument = document.getElementById("instrument").value;
+        const res = await fetch("/api/browse?instrument=" + encodeURIComponent(instrument));
         const data = await res.json();
         state.selectedPaths = data.paths || [];
         renderSelectedFiles();
-        const instr = document.getElementById("instrument").value;
-        if (state.uiModes[instr] === 'multi_assignment') {
-          parseAssignmentFiles(instr, state.selectedPaths);
+        if (state.uiModes[instrument] === 'multi_assignment') {
+          parseAssignmentFiles(instrument, state.selectedPaths);
         }
         checkEmbeddedProject(state.selectedPaths[0]);
       } catch (e) {

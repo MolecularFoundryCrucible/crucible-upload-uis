@@ -5,6 +5,7 @@ INSTRUMENT_MFID = '0t0nah22xxxjd000gy940mm9d8'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
+IS_SESSION = False
 FLOW = None
 POST_PROCESSING = ['insitu_aggregation']
 PANEL_TEMPLATE = None

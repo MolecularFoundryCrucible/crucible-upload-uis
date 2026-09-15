@@ -5,6 +5,7 @@ INSTRUMENT_MFID = '0t4ptyzswnyps0006tqctfjbpr'
 UI_MODE = 'photobox'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
+IS_SESSION = False
 FLOW = 'photobox-upload/photobox-upload'
 POST_PROCESSING = ['carrier_segmentation']
 PANEL_TEMPLATE = 'instruments/spinbot_photobox/panel.html'

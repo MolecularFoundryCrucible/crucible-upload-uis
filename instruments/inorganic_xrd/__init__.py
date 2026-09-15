@@ -1,7 +1,7 @@
 from .parse import parse_xrd_file
 
 NAME = 'inorganic_xrd'
-INGESTOR = ''
+INGESTOR = 'InorganicXRDIngestor'
 INSTRUMENT_ID = 'inorganic-xrd'
 INSTRUMENT_MFID = '0tmz7j9xmsrvn000tbs1zjwgpr'
 UI_MODE = 'multi_assignment'

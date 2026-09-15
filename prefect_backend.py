@@ -200,6 +200,11 @@ def list_active_instruments() -> list[dict]:
     return client.instruments.list(status='active', limit=500)
 
 
+def search_instruments(q: str) -> list[dict]:
+    """Fuzzy instrument search from Crucible, for the instrument autocomplete."""
+    return client.instruments.search(q, limit=20, status='active')
+
+
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
     parts = Path(session_folder_path).resolve().parts
     if len(parts) - 1 < min_depth:  # subtract 1 to not count the root

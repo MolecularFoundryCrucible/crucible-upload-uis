@@ -81,26 +81,15 @@ def index():
     return render_template("index.html",
                            print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
                            crucible_version=crucible.__version__,
-                           instruments=registry.INSTRUMENTS,
                            panel_templates=registry.PANEL_TEMPLATES,
                            holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
 
 
-@app.get("/api/instruments")
-def get_instruments():
+def _instrument_rows(live):
     # Local registry NAMEs whose INSTRUMENT_MFID matches a live Crucible instrument get
     # their custom pipeline (ui_mode, panel, ingestor, etc.); everything else on the
     # platform is still selectable and falls back to plain upload.
     mfid_to_name = {mfid: name for name, mfid in registry.INSTRUMENT_MFIDS.items()}
-
-    try:
-        live = backend.list_active_instruments()
-    except Exception as e:
-        backend.logger.warning(f"instrument list API call failed: {e}")
-        # Fail loudly (empty list) rather than falling back to the static registry —
-        # if the Crucible API is unreachable, uploads won't work either, so surface
-        # that now instead of letting the user do work that can't complete.
-        return jsonify({"instruments": [], "labels": {}, "error": str(e)})
 
     rows = []
     for inst in live:
@@ -110,7 +99,21 @@ def get_instruments():
         suffix = local_name if local_name else "no uploader registered"
         rows.append((instrument_id, value, f"{instrument_id} ({suffix})"))
     rows.sort(key=lambda r: r[0].lower())
+    return rows
 
+
+@app.get("/api/instruments")
+def get_instruments():
+    try:
+        live = backend.list_active_instruments()
+    except Exception as e:
+        backend.logger.warning(f"instrument list API call failed: {e}")
+        # Fail loudly (empty list) rather than falling back to the static registry —
+        # if the Crucible API is unreachable, uploads won't work either, so surface
+        # that now instead of letting the user do work that can't complete.
+        return jsonify({"instruments": [], "labels": {}, "error": str(e)})
+
+    rows = _instrument_rows(live)
     instruments = [value for _, value, _ in rows]
     labels = {value: label for _, value, label in rows}
 
@@ -125,6 +128,24 @@ def get_instruments():
         "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
         "default_ingestors": registry.INSTRUMENT_INGESTORS,
         "instrument_session_modes": registry.INSTRUMENT_SESSION_MODES,
+    })
+
+
+@app.get("/api/instruments/search")
+def search_instruments_route():
+    q = request.args.get("q", "").strip()
+    if len(q) < 3:
+        return jsonify({"instruments": [], "labels": {}})
+    try:
+        live = backend.search_instruments(q)
+    except Exception as e:
+        backend.logger.warning(f"instrument search API call failed: {e}")
+        return jsonify({"instruments": [], "labels": {}, "error": str(e)})
+
+    rows = _instrument_rows(live)
+    return jsonify({
+        "instruments": [value for _, value, _ in rows],
+        "labels": {value: label for _, value, label in rows},
     })
 
 

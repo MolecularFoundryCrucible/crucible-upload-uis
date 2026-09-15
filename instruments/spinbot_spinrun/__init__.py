@@ -5,6 +5,7 @@ INSTRUMENT_MFID = '0sh6zrzxhxsa100089bznryq88'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''
+IS_SESSION = False
 ACCEPTABLE_FILE_TYPES = {'.h5', '.yaml'}
 FLOW = None
 POST_PROCESSING = []

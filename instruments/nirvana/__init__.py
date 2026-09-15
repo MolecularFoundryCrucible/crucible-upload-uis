@@ -12,6 +12,7 @@ HOLDER_LAYOUTS = {
     ],
 }
 DEFAULT_HOLDER_LAYOUT = 'Tray 2×8'
+IS_SESSION = False
 FLOW = None
 POST_PROCESSING = []
 PANEL_TEMPLATE = 'instruments/nirvana/panel.html'

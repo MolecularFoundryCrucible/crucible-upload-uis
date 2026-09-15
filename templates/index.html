@@ -150,9 +150,12 @@
 
             <!-- Instrument -->
             <label class="form-label fw-semibold">Instrument</label>
-            <select id="instrument" class="form-select mb-3" onchange="onInstrumentChange()">
-              <option value="">Select instrument</option>
-            </select>
+            <div class="position-relative mb-3">
+              <input id="instrument-search" type="text" class="form-control" placeholder="Type to search instruments…" autocomplete="off"
+                     oninput="onInstrumentSearchInput()" onfocus="onInstrumentSearchFocus()" onblur="onInstrumentSearchBlur()" onkeydown="onInstrumentSearchKeydown(event)" />
+              <input type="hidden" id="instrument" />
+              <div id="instrument-suggestions" class="list-group position-absolute w-100 shadow-sm d-none" style="z-index: 1050; max-height: 260px; overflow-y: auto;"></div>
+            </div>
 
             <!-- Ingestor -->
             <label class="form-label fw-semibold">Ingestor</label>
@@ -440,9 +443,7 @@
           <!-- Default instrument -->
           <label class="form-label fw-semibold">Default instrument</label>
           <select id="cfg-default-instrument" class="form-select mb-3">
-            {% for instr in instruments %}
-            <option value="{{ instr }}">{{ instr }}</option>
-            {% endfor %}
+            <option value="">(none)</option>
           </select>
 
           <!-- Default ingestor -->
@@ -582,16 +583,22 @@
     async function init() {
       const res = await fetch("/api/instruments");
       const data = await res.json();
-      const sel = document.getElementById("instrument");
       const labels = data.labels || {};
+
+      // Default-instrument dropdown in Settings: same live instrument list as the
+      // main search box, just rendered as a plain <select> since it's a one-time
+      // admin choice rather than something picked on every upload.
+      const defSel = document.getElementById("cfg-default-instrument");
       data.instruments.forEach(name => {
         const opt = document.createElement("option");
         opt.value = name;
         opt.textContent = labels[name] || name;
-        sel.appendChild(opt);
+        defSel.appendChild(opt);
       });
+
       if (data.default) {
-        sel.value = data.default;
+        document.getElementById("instrument").value = data.default;
+        document.getElementById("instrument-search").value = labels[data.default] || data.default;
       }
       if (data.error) {
         showStatus("Failed to load instruments from Crucible: " + data.error, "danger");
@@ -974,13 +981,13 @@
 
     async function browseFolder() {
       try {
-        const res = await fetch("/api/browse");
+        const instrument = document.getElementById("instrument").value;
+        const res = await fetch("/api/browse?instrument=" + encodeURIComponent(instrument));
         const data = await res.json();
         state.selectedPaths = data.paths || [];
         renderSelectedFiles();
-        const instr = document.getElementById("instrument").value;
-        if (state.uiModes[instr] === 'multi_assignment') {
-          parseAssignmentFiles(instr, state.selectedPaths);
+        if (state.uiModes[instrument] === 'multi_assignment') {
+          parseAssignmentFiles(instrument, state.selectedPaths);
         }
         checkEmbeddedProject(state.selectedPaths[0]);
       } catch (e) {
@@ -1707,6 +1714,118 @@
       document.getElementById("ma-empty-msg").textContent = "Browse and select files above to load assignments.";
       if (state.selectedPaths.length > 0) {
         parseAssignmentFiles(instrument, state.selectedPaths);
+      }
+    }
+
+    // ── Instrument search / autocomplete ──────────────────────────────────────
+    let _instrumentSearchTimer = null;
+    state.instrumentSuggestions = [];
+    state.instrumentSuggestionIndex = -1;
+
+    function _instrumentSuggestionRows(data) {
+      const labels = data.labels || {};
+      return (data.instruments || []).map(value => ({ value, label: labels[value] || value }));
+    }
+
+    function renderInstrumentSuggestions() {
+      const box = document.getElementById("instrument-suggestions");
+      const rows = state.instrumentSuggestions;
+      if (!rows.length) {
+        box.classList.add("d-none");
+        box.innerHTML = "";
+        return;
+      }
+      box.innerHTML = rows.map((r, i) => `
+        <button type="button" class="list-group-item list-group-item-action${i === state.instrumentSuggestionIndex ? ' active' : ''}" data-index="${i}">
+          ${escapeHtml(r.label)}
+        </button>
+      `).join("");
+      box.classList.remove("d-none");
+      // mousedown (not click) fires before the input blurs, and before this box's own
+      // outside-click handler would otherwise close the panel first. Mouse hover feedback
+      // comes from Bootstrap's own :hover CSS, not a JS re-render — rebuilding this list on
+      // every mouseenter can retrigger enter events on the freshly-inserted node and thrash
+      // the DOM out from under the pointer right as the user clicks.
+      box.querySelectorAll("[data-index]").forEach(btn => {
+        const idx = parseInt(btn.dataset.index, 10);
+        btn.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          selectInstrumentSuggestion(state.instrumentSuggestions[idx]);
+        });
+      });
+    }
+
+    function hideInstrumentSuggestions() {
+      state.instrumentSuggestions = [];
+      state.instrumentSuggestionIndex = -1;
+      const box = document.getElementById("instrument-suggestions");
+      box.classList.add("d-none");
+      box.innerHTML = "";
+    }
+
+    function selectInstrumentSuggestion(row) {
+      if (!row) return;
+      document.getElementById("instrument").value = row.value;
+      document.getElementById("instrument-search").value = row.label;
+      hideInstrumentSuggestions();
+      onInstrumentChange();
+    }
+
+    async function fetchInstrumentSuggestions(q) {
+      try {
+        const res = await fetch("/api/instruments/search?q=" + encodeURIComponent(q));
+        const data = await res.json();
+        if (data.error) showStatus("Instrument search failed: " + data.error, "danger");
+        // Drop stale responses if the field emptied out below the 3-char threshold meanwhile.
+        if (document.getElementById("instrument-search").value.trim().length < 3) return;
+        state.instrumentSuggestions = _instrumentSuggestionRows(data);
+        state.instrumentSuggestionIndex = -1;
+        renderInstrumentSuggestions();
+      } catch (e) {
+        // A network hiccup mid-typing isn't worth surfacing.
+      }
+    }
+
+    function onInstrumentSearchInput() {
+      const q = document.getElementById("instrument-search").value.trim();
+      clearTimeout(_instrumentSearchTimer);
+      if (q.length < 3) {
+        hideInstrumentSuggestions();
+        return;
+      }
+      _instrumentSearchTimer = setTimeout(() => fetchInstrumentSuggestions(q), 250);
+    }
+
+    function onInstrumentSearchFocus() {
+      const field = document.getElementById("instrument-search");
+      field.select();
+      const q = field.value.trim();
+      if (q.length >= 3) fetchInstrumentSuggestions(q);
+    }
+
+    function onInstrumentSearchBlur() {
+      // Delay so a suggestion's mousedown can still register before the panel closes.
+      setTimeout(hideInstrumentSuggestions, 150);
+    }
+
+    function onInstrumentSearchKeydown(e) {
+      const rows = state.instrumentSuggestions;
+      if (!rows.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        state.instrumentSuggestionIndex = Math.min(state.instrumentSuggestionIndex + 1, rows.length - 1);
+        renderInstrumentSuggestions();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        state.instrumentSuggestionIndex = Math.max(state.instrumentSuggestionIndex - 1, 0);
+        renderInstrumentSuggestions();
+      } else if (e.key === "Enter") {
+        if (state.instrumentSuggestionIndex >= 0) {
+          e.preventDefault();
+          selectInstrumentSuggestion(rows[state.instrumentSuggestionIndex]);
+        }
+      } else if (e.key === "Escape") {
+        hideInstrumentSuggestions();
       }
     }
 

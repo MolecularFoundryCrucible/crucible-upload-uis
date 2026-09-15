@@ -1,7 +1,7 @@
-NAME = 'spectre'
+NAME = 'f200'
 INGESTOR = ''
-INSTRUMENT_ID = 'spectre'
-INSTRUMENT_MFID = '0tf06pwcg9ymf00014jzj3rzs8'
+INSTRUMENT_ID = 'f200'
+INSTRUMENT_MFID = '0tkkpbc07sv6z000x7b2f1bgs0'
 UI_MODE = 'standard'
 HOLDER_LAYOUTS = {}
 DEFAULT_HOLDER_LAYOUT = ''

@@ -25,3 +25,4 @@ mf-crucible-*.json
 *.txy
 *_instrument_conf.py
 /instrument_conf.py
+CLAUDE.md

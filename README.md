@@ -104,7 +104,8 @@ Per-machine settings live in `instrument_conf.py`, created automatically on firs
 | `DEFAULT_INSTRUMENT_NAME` | Instrument pre-selected when the app opens |
 | `DEFAULT_INGESTOR` | Ingestor class pre-selected when an instrument is chosen |
 | `CHAIN_POST_PROCESSING` | Whether an instrument's post-processing requests run sequentially (`True`) or in parallel (`False`) |
-| `PRINT_BARCODE_ENABLED` | Enables the sample barcode printing integration (see the comment block in `instrument_conf.default.py` for printer setup) |
+| `PRINT_BARCODE_ENABLED` | Enables the sample barcode printing integration — see the comment block in `instrument_conf.default.py` for setup (requires a local `.env` with MQTT credentials; copy from `env.sample`) |
+| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs) |
 
 ## Adding a New Instrument
 

@@ -203,6 +203,7 @@ EDITABLE_FIELDS = {
     "DEFAULT_INGESTOR": "str",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
+    "PRINTER_ID": "str",
 }
 
 

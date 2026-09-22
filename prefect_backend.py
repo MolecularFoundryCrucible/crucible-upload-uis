@@ -162,13 +162,13 @@ def create_sample(sample_name: str,
 
 
 def print_sample_barcode(sample_unique_id, sample_name):
-    from image_print import make_qr, make_image, print_label
-    # qr code
-    qr_img = make_qr(sample_unique_id)
+    import instrument_conf as conf
+    import mqtt_print
 
-    # label image
-    make_image(qr_img, [sample_name, sample_unique_id[0:13]], "batch.png")
-    print_label("Brother PT-D610BT", "batch.png")
+    printer_id = getattr(conf, "PRINTER_ID", "")
+    if not printer_id:
+        raise ValueError("PRINTER_ID is not set — configure it in the ⚙ Config panel")
+    mqtt_print.send_print_job(printer_id, sample_unique_id, sample_name)
     return
 
 

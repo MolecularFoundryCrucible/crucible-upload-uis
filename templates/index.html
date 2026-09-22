@@ -462,6 +462,10 @@
             <label class="form-check-label" for="cfg-print-barcode">Enable barcode printing</label>
           </div>
 
+          <!-- Printer ID -->
+          <label class="form-label fw-semibold">Printer ID</label>
+          <input id="cfg-printer-id" type="text" class="form-control mb-3" placeholder="e.g. b30-113" />
+
           <div class="alert alert-warning small mb-0 mt-3">
             Note: <code>CHAIN_POST_PROCESSING</code> is read by the Prefect worker process — restart the worker for that to take effect.
           </div>
@@ -2210,6 +2214,7 @@
         document.getElementById("cfg-browse-dir").value = c.DEFAULT_BROWSE_DIR || "";
         document.getElementById("cfg-chain-postproc").checked = !!c.CHAIN_POST_PROCESSING;
         document.getElementById("cfg-print-barcode").checked = !!c.PRINT_BARCODE_ENABLED;
+        document.getElementById("cfg-printer-id").value = c.PRINTER_ID || "";
 
         const defSel = document.getElementById("cfg-default-instrument");
         if (c.DEFAULT_INSTRUMENT_NAME) defSel.value = c.DEFAULT_INSTRUMENT_NAME;
@@ -2239,6 +2244,7 @@
         DEFAULT_INGESTOR: document.getElementById("cfg-default-ingestor").value,
         CHAIN_POST_PROCESSING: document.getElementById("cfg-chain-postproc").checked,
         PRINT_BARCODE_ENABLED: document.getElementById("cfg-print-barcode").checked,
+        PRINTER_ID: document.getElementById("cfg-printer-id").value.trim(),
       };
 
       document.getElementById("spinner-save-config").classList.remove("d-none");

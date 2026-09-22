@@ -10,7 +10,18 @@
       <button class="btn btn-outline-secondary" type="button" onclick="spinrunBrowseYaml()">Browse…</button>
       <button class="btn btn-outline-secondary" type="button" onclick="spinrunClearYaml()" title="Clear">&#x2715;</button>
     </div>
-    <div class="form-text">The .h5 file above is required; this is an optional companion file.</div>
+    <div class="form-text mb-3">The .h5 file above is required; this is an optional companion file.</div>
+
+    {% if print_barcode_enabled %}
+    <div id="spinrun-trays-section" class="d-none">
+      <label class="form-label fw-semibold">Trays in this run</label>
+      <ul id="spinrun-trays-list" class="list-group mb-2 small"></ul>
+      <button class="btn btn-outline-primary" type="button" id="btn-spinrun-print-trays" onclick="spinrunPrintTrays()">
+        <span id="spinner-spinrun-print-trays" class="spinner-border spinner-border-sm d-none" role="status"></span>
+        Print All Tray Barcodes
+      </button>
+    </div>
+    {% endif %}
   </div>
 </div>
 
@@ -18,16 +29,72 @@
 (function () {
   window._instrumentPanelClearers = window._instrumentPanelClearers || {};
   window._instrumentExtraFiles = window._instrumentExtraFiles || {};
+  window._instrumentOnFileSelect = window._instrumentOnFileSelect || {};
 
   let _spinrunYamlPath = '';
+  let _spinrunTrays = [];
 
   function _spinrunClear() {
     _spinrunYamlPath = '';
     document.getElementById('spinrun-yaml-path').value = '';
   }
 
+  function _renderTrays() {
+    const section = document.getElementById('spinrun-trays-section');
+    const list = document.getElementById('spinrun-trays-list');
+    if (!section || !list) return;
+    if (!_spinrunTrays.length) {
+      section.classList.add('d-none');
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = _spinrunTrays
+      .map(t => `<li class="list-group-item py-1 px-2">${t.name} <span class="text-muted">(${t.mfid})</span></li>`)
+      .join('');
+    section.classList.remove('d-none');
+  }
+
   window._instrumentPanelClearers['spinbot_spinrun'] = _spinrunClear;
   window._instrumentExtraFiles['spinbot_spinrun'] = () => _spinrunYamlPath ? [_spinrunYamlPath] : [];
+
+  window._instrumentOnFileSelect['spinbot_spinrun'] = async function (path) {
+    _spinrunTrays = [];
+    _renderTrays();
+    if (!path || !path.endsWith('.h5')) return;
+    try {
+      const res = await fetch('/api/spinrun/trays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: path }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || 'Failed to read trays.', 'danger'); return; }
+      _spinrunTrays = data.trays || [];
+      _renderTrays();
+    } catch (e) {
+      showStatus('Failed to read trays: ' + e.message, 'danger');
+    }
+  };
+
+  window.spinrunPrintTrays = async function () {
+    if (!_spinrunTrays.length) return;
+    setSpinner('spinrun-print-trays', true);
+    clearStatus();
+    try {
+      const res = await fetch('/api/spinrun/print-trays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trays: _spinrunTrays }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error, 'danger'); return; }
+      showStatus(`Sent ${_spinrunTrays.length} tray label(s) to printer!`, 'success');
+    } catch (e) {
+      showStatus('Print trays failed: ' + e.message, 'danger');
+    } finally {
+      setSpinner('spinrun-print-trays', false);
+    }
+  };
 
   window.spinrunBrowseYaml = async function () {
     try {

@@ -39,7 +39,12 @@ uv sync
 ```
 crucible config init
 ```
-4. Run the app!
+4. (Optional) If this machine will print sample barcodes, copy `env.sample` to `.env` and fill
+   in the MQTT credentials — reach out to the development team for these:
+```
+cp env.sample .env
+```
+5. Run the app!
 
 ### Running the app
 The app runs as three coordinated processes: a local **Prefect server** (orchestration), **`serve_flows.py`** (registers and serves the upload flows as Prefect deployments), and the **Flask UI** (`main.py`). The provided start scripts launch all three together and shut them down on exit.
@@ -104,7 +109,8 @@ Per-machine settings live in `instrument_conf.py`, created automatically on firs
 | `DEFAULT_INSTRUMENT_NAME` | Instrument pre-selected when the app opens |
 | `DEFAULT_INGESTOR` | Ingestor class pre-selected when an instrument is chosen |
 | `CHAIN_POST_PROCESSING` | Whether an instrument's post-processing requests run sequentially (`True`) or in parallel (`False`) |
-| `PRINT_BARCODE_ENABLED` | Enables the sample barcode printing integration (see the comment block in `instrument_conf.default.py` for printer setup) |
+| `PRINT_BARCODE_ENABLED` | Enables the sample barcode printing integration — see the comment block in `instrument_conf.default.py` for setup. Requires a local `.env` file (copy from `env.sample`) with `MQTT_USERNAME`/`MQTT_PASSWORD` for the `crucible-printers` broker; reach out to the development team for these credentials |
+| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs) |
 
 ## Adding a New Instrument
 

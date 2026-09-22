@@ -14,14 +14,16 @@ DEFAULT_INGESTOR = ''
 CHAIN_POST_PROCESSING = True
 
 PRINT_BARCODE_ENABLED = False
+PRINTER_ID = ''
 
 '''
 To enable barcode printing:
 - set PRINT_BARCODE_ENABLED to True
-- Connect a brother pt-d610bt label printer to the computer running this code, and set the printer name in the print_label function in backend.py
-- Install the required libraries: uv add pywin32
-- Install printer driver from here: https://support.brother.com/g/b/downloadtop.aspx?c=us&lang=en&prod=d610bteus
-- Find the printer in settings under printers and scanners and note the exact name (e.g. "Brother PT-D610BT")
-- Download the brothers SDK for Windows B-pac (made a free account)
-- Set printer settings through windows to match the tape type and size that you want to print (https://docs.google.com/presentation/d/1vSS1Xp0fzIwflpj50vx5LOO9MuW7FtZhLS1EQ7D4opI/edit?usp=sharing)
+- Set PRINTER_ID to the crucible-label-printer print_id for the printer this
+  machine should use (see crucible-label-printer/ansible/inventory.yaml for
+  valid IDs, e.g. "b30-113", "ucd1")
+- Copy env.sample to .env in this repo and fill in MQTT_PASSWORD (and
+  MQTT_BROKER/MQTT_USERNAME/MQTT_PORT if they differ from the defaults)
+- Printing is handled by the crucible-label-printer Raspberry Pi fleet over
+  MQTT — no local printer driver or setup is needed on this machine
 '''

@@ -203,6 +203,7 @@ EDITABLE_FIELDS = {
     "DEFAULT_INGESTOR": "str",
     "CHAIN_POST_PROCESSING": "bool",
     "PRINT_BARCODE_ENABLED": "bool",
+    "PRINTER_ID": "str",
 }
 
 
@@ -404,6 +405,32 @@ def print_barcode():
         return jsonify({"error": "Missing sample_unique_id"}), 400
     try:
         backend.print_sample_barcode(sample_unique_id, sample_name)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
+@app.post("/api/spinrun/trays")
+def spinrun_trays():
+    data = request.json or {}
+    path = data.get("file", "")
+    if not path or not os.path.isfile(path):
+        return jsonify({"error": "Missing or invalid file"}), 400
+    try:
+        trays = backend.read_h5_trays(path)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"trays": trays})
+
+
+@app.post("/api/spinrun/print-trays")
+def spinrun_print_trays():
+    data = request.json or {}
+    trays = data.get("trays") or []
+    if not trays:
+        return jsonify({"error": "No trays to print"}), 400
+    try:
+        backend.print_tray_barcodes(trays)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True})

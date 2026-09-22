@@ -162,13 +162,13 @@ def create_sample(sample_name: str,
 
 
 def print_sample_barcode(sample_unique_id, sample_name):
-    from image_print import make_qr, make_image, print_label
-    # qr code
-    qr_img = make_qr(sample_unique_id)
+    import instrument_conf as conf
+    import mqtt_print
 
-    # label image
-    make_image(qr_img, [sample_name, sample_unique_id[0:13]], "batch.png")
-    print_label("Brother PT-D610BT", "batch.png")
+    printer_id = getattr(conf, "PRINTER_ID", "")
+    if not printer_id:
+        raise ValueError("PRINTER_ID is not set — configure it in the ⚙ Config panel")
+    mqtt_print.send_print_job(printer_id, sample_unique_id, sample_name)
     return
 
 
@@ -358,6 +358,50 @@ def read_h5_dsid(file_path: str) -> str | None:
     except Exception:
         return None
     return None
+
+
+_SPINRUN_SAMPLES_PATH = 'measurement/spin_run/samples'
+
+
+def read_h5_trays(file_path: str) -> list[dict]:
+    """Return the deduped trays referenced in a SpinBot spin_run h5 file, as
+    [{'mfid': ..., 'name': ...}, ...] in first-seen order.
+
+    Each entry under measurement/spin_run/samples is one thin-film sample, whose attrs
+    carry its parent tray's id/name (batch_id/batch_name) alongside its own. Mirrors the
+    tray-dedup logic in crucible-ingestion's SpinbotSpinRunIngestor.parse_samples(),
+    without depending on that package.
+    """
+    trays = []
+    seen = set()
+    with h5py.File(file_path, 'r') as f:
+        samples = f.get(_SPINRUN_SAMPLES_PATH)
+        if samples is None:
+            return trays
+        for key in samples:
+            attrs = samples[key].attrs
+            tray_id = attrs.get('batch_id')
+            if tray_id is None:
+                continue
+            tray_id = tray_id.decode() if isinstance(tray_id, bytes) else str(tray_id)
+            if tray_id in seen:
+                continue
+            seen.add(tray_id)
+            tray_name = attrs.get('batch_name')
+            tray_name = tray_name.decode() if isinstance(tray_name, bytes) else str(tray_name)
+            trays.append({'mfid': tray_id, 'name': tray_name})
+    return trays
+
+
+def print_tray_barcodes(trays: list[dict]) -> None:
+    import instrument_conf as conf
+    import mqtt_print
+
+    printer_id = getattr(conf, "PRINTER_ID", "")
+    if not printer_id:
+        raise ValueError("PRINTER_ID is not set — configure it in the ⚙ Config panel")
+    for tray in trays:
+        mqtt_print.send_print_job(printer_id, tray["mfid"], tray["name"])
 
 
 def resolve_dsids_parallel(files: list[str], valid_dsids: set[str] | None = None,

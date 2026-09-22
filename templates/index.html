@@ -994,6 +994,7 @@
           parseAssignmentFiles(instrument, state.selectedPaths);
         }
         checkEmbeddedProject(state.selectedPaths[0]);
+        (window._instrumentOnFileSelect || {})[instrument]?.(state.selectedPaths[0]);
       } catch (e) {
         showStatus("Browse failed: " + e.message, "danger");
       }
@@ -1006,6 +1007,8 @@
       // Also clear holder UUID inputs
       document.querySelectorAll(".ma-holder-uuid").forEach(el => el.value = "");
       unlockProjectDropdown();
+      const instrument = document.getElementById("instrument").value;
+      (window._instrumentOnFileSelect || {})[instrument]?.(null);
     }
 
     // ── Project lock (file-embedded project_id) ──────────────────────────────

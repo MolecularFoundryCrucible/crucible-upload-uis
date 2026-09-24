@@ -136,7 +136,7 @@ def find_samples(sample_name: str | None = None, sample_unique_id: str | None = 
 
 def apply_sample_metadata(packet, field_map: dict[str, str], values: dict,
                           project_id: str) -> list[dict]:
-    """Resolve required sample MFIDs, record their names, and stage their links.
+    """Resolve required sample MFIDs, record their identity, and stage their links.
 
     ``field_map`` maps scientific metadata names to request keys. Looking up by
     both MFID and project prevents an accidentally pasted sample from another
@@ -170,7 +170,10 @@ def apply_sample_metadata(packet, field_map: dict[str, str], values: dict,
         })
 
     for sample in resolved:
-        packet.scientific_metadata[sample['metadata_field']] = sample['sample_name']
+        packet.scientific_metadata[sample['metadata_field']] = {
+            'sample_name': sample['sample_name'],
+            'sample_mfid': sample['unique_id'],
+        }
 
     packet.samples = _dedup_by(
         list(packet.samples) + [

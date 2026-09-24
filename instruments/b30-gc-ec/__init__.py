@@ -12,8 +12,8 @@ PANEL_TEMPLATE = 'instruments/b30-gc-ec/panel.html'
 FILE_PARSER = None
 
 # Scientific metadata field -> request field containing the Crucible sample MFID.
-# The preview route resolves these to authoritative sample names and adds the
-# corresponding existing samples to the ingestion packet for dataset linking.
+# The preview route resolves these to authoritative sample names/MFIDs and adds
+# the corresponding existing samples to the ingestion packet for dataset linking.
 SAMPLE_METADATA_FIELDS = {
     'anode_material': 'anode_sample_mfid',
     'cathode_material': 'cathode_sample_mfid',

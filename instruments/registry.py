@@ -2,6 +2,21 @@ import importlib
 import pkgutil
 import instruments as _pkg
 
+# Maps a substring of instrument NAME to the extra-section template that should
+# be shown below the file-selection card for every matching instrument.
+# Add a new entry here to extend coverage; no per-instrument __init__.py change needed.
+_EXTRA_SECTION_PATTERN_MAP = [
+    ("b30 - SRI GC", "instruments/_gc_shared/extra_section.html"),
+]
+
+
+def _extra_section_template(name):
+    explicit = None  # per-instrument override takes precedence if present
+    for substring, tmpl in _EXTRA_SECTION_PATTERN_MAP:
+        if substring in name:
+            return tmpl
+    return explicit
+
 
 def _load_all():
     mods = []
@@ -25,5 +40,6 @@ INSTRUMENT_FILE_TYPES     = {m.NAME: m.ACCEPTABLE_FILE_TYPES for m in _MODS if g
 POST_PROCESSING_REQUESTS  = {m.NAME: m.POST_PROCESSING for m in _MODS if m.POST_PROCESSING}
 FILE_PARSERS              = {m.NAME: m.FILE_PARSER for m in _MODS if m.FILE_PARSER}
 PANEL_TEMPLATES           = {m.NAME: m.PANEL_TEMPLATE for m in _MODS if m.PANEL_TEMPLATE}
+EXTRA_SECTION_TEMPLATES   = {m.NAME: t for m in _MODS if (t := _extra_section_template(m.NAME))}
 INSTRUMENT_MFIDS          = {m.NAME: m.INSTRUMENT_MFID for m in _MODS if getattr(m, 'INSTRUMENT_MFID', None)}
 INSTRUMENT_IDS            = {m.NAME: m.INSTRUMENT_ID for m in _MODS if getattr(m, 'INSTRUMENT_ID', None)}

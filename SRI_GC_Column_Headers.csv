@@ -1,0 +1,65 @@
+﻿Number,Column name,Header field
+0,Component,False
+1,Number,False
+2,Retention,False
+3,Height,False
+4,Area,False
+5,Area %,False
+6,External,False
+7,Norm area %,False
+8,Internal,False
+9,Units,False
+10,Internal w/o,False
+11,Area(uVs),False
+12,Type,False
+13,Shift,False
+14,RSD,False
+15,Total Plates,False
+16,Cap factor,False
+17,Asym 5%,False
+18,Asym 10%,False
+19,Width,False
+20,Width 50%,False
+21,Temperature,False
+22,Resolution,False
+23,Lab name,True
+24,Client,True
+25,Client ID,True
+26,Collection date,True
+27,Holding time,True
+28,Analysis date,True
+29,Method,True
+30,Lab ID,True
+31,Description,True
+32,Column,True
+33,Carrier,True
+34,Temperature program,True
+35,Events,True
+36,Components,True
+37,Control file,True
+38,Data file,True
+39,Sample,True
+40,Operator,True
+41,Comments,True
+42,QC batch,True
+43,Alarm,False
+44,High value,False
+45,Trailing 5%,False
+46,Trailing 10%,False
+47,Calc1,False
+48,Calc2,False
+49,Calc3,False
+50,Calc4,False
+51,Calc5,False
+52,Calc6,False
+53,Calc7,False
+54,Calc8,False
+55,Centroid,False
+56,Channel,False
+57,Matching signature,True
+58,Matching score,True
+59,TextCalc1,False
+60,TextCalc2,False
+61,Datalogger,False
+62,Millivolts,False
+63,DataloggerHiRange,False

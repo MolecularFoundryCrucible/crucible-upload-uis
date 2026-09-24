@@ -1,4 +1,4 @@
-NAME = 'gc-b30-001'
+NAME = 'b30 - SRI GC #1 N10754'
 INGESTOR = ''
 INSTRUMENT_ID = 'gc-b30-001'
 INSTRUMENT_MFID = '0tmfg17radzgf000w544pxmwer'

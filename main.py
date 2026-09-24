@@ -2,10 +2,12 @@
 Crucible Upload UI — Flask backend
 """
 import ast
+import csv
 import importlib
 import logging
 import os
 import queue
+import re
 import threading
 import webbrowser
 import tkinter as tk
@@ -82,6 +84,7 @@ def index():
                            print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
                            crucible_version=crucible.__version__,
                            panel_templates=registry.PANEL_TEMPLATES,
+                           extra_section_templates=registry.EXTRA_SECTION_TEMPLATES,
                            holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
 
 
@@ -476,6 +479,7 @@ def do_preview():
     ingestor = (data.get("ingestor") or "").strip()
     comments = (data.get("comments") or "").strip()
     kw_list = data.get("keywords") or []
+    extra_scientific_metadata = data.get("scientific_metadata") or {}
 
     # Nothing is written to Crucible here. The dsid is only resolved, not created — either
     # an existing record matched by SHA, or a fresh mfid that stays unused until the
@@ -524,6 +528,8 @@ def do_preview():
 
     if comments:
         packet.scientific_metadata.setdefault("comments", comments)
+    for key, val in extra_scientific_metadata.items():
+        packet.scientific_metadata.setdefault(key, val)
     if kw_list:
         packet.keywords = backend._dedup(list(packet.keywords) + list(kw_list))
 
@@ -733,6 +739,49 @@ def do_upload():
     except Exception as e:
         backend.logger.error(e)
         return jsonify({"error": str(e)}), 500
+
+
+_GC_HEADERS_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SRI_GC_Column_Headers.csv")
+_GC_COL_NAMES: dict[int, str] = {}
+
+def _load_gc_col_names():
+    global _GC_COL_NAMES
+    if _GC_COL_NAMES:
+        return
+    with open(_GC_HEADERS_CSV, newline='', encoding='utf-8-sig') as f:
+        for row in csv.DictReader(f):
+            _GC_COL_NAMES[int(row['Number'])] = row['Column name']
+
+_CHANNEL_FIELDS_RE = re.compile(
+    r'<CHANNEL\s+(\d+)\s+PRINT\s+FIELDS\s*>=\s*F([\d,]*)', re.IGNORECASE
+)
+
+@app.post("/api/gc/parse_control")
+def gc_parse_control():
+    data = request.json or {}
+    file_path = (data.get("file") or "").strip()
+    if not file_path:
+        return jsonify({"error": "file required"}), 400
+    if not os.path.isfile(file_path):
+        return jsonify({"error": f"File not found: {file_path}"}), 400
+    try:
+        _load_gc_col_names()
+    except Exception as e:
+        return jsonify({"error": f"Could not load column headers: {e}"}), 500
+    channels = {}
+    try:
+        with open(file_path, 'r', errors='replace') as f:
+            for line in f:
+                m = _CHANNEL_FIELDS_RE.match(line.strip())
+                if not m:
+                    continue
+                ch_num = int(m.group(1))
+                indices = [int(x) for x in m.group(2).split(',') if x.strip()]
+                columns = [_GC_COL_NAMES.get(i, f"Unknown ({i})") for i in indices]
+                channels[ch_num] = {"indices": indices, "columns": columns}
+    except Exception as e:
+        return jsonify({"error": f"Could not parse control file: {e}"}), 500
+    return jsonify({"channels": channels})
 
 
 @app.post("/api/parse_files")

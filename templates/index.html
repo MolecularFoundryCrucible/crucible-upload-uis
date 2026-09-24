@@ -278,6 +278,14 @@
       </div>
     </div>
 
+    <!-- Per-instrument extra sections (shown below the file card, full width) -->
+    {% for instrument_name, tmpl in extra_section_templates.items() %}
+    {% set extra_section_index = loop.index %}
+    <div id="extra-{{ instrument_name }}" class="instrument-extra-section d-none mb-4">
+      {% include tmpl %}
+    </div>
+    {% endfor %}
+
     <!-- Status + Upload -->
     <div class="d-flex align-items-center gap-3 mb-5">
       <div id="status-box" class="flex-grow-1"></div>
@@ -1270,10 +1278,12 @@
       if (!_previewValidate()) return;
       clearStatus();
 
+      const _instName = document.getElementById("instrument").value;
       _previewParams = {
         orcid: state.orcid,
         project_id: document.getElementById("project").value,
-        instrument_name: document.getElementById("instrument").value,
+        instrument_name: _instName,
+        scientific_metadata: (window._instrumentScientificMetadata || {})[_instName]?.() || null,
         ingestor: document.getElementById("ingestor").value || null,
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
@@ -1682,8 +1692,11 @@
       // instruments that upload files rather than whole sessions.
       const isPreview = state.uiModes[instrument] === 'preview' && !state.isSession;
 
-      // Hide all per-instrument panels
+      // Hide all per-instrument panels and extra sections
       document.querySelectorAll('.instrument-panel').forEach(el => el.classList.add('d-none'));
+      document.querySelectorAll('.instrument-extra-section').forEach(el => el.classList.add('d-none'));
+      const extraSection = document.getElementById(`extra-${instrument}`);
+      if (extraSection) extraSection.classList.remove('d-none');
 
       // Any instrument with a registered panel (multi_assignment, photobox, or a plain
       // 'standard' instrument like spinbot_spinrun) replaces Sample Info with its own panel.

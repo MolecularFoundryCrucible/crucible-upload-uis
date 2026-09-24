@@ -1,0 +1,112 @@
+{% set _gc_uid = extra_section_index %}
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h5 class="card-title text-primary mb-1">GC Control File</h5>
+    <p class="text-muted small mb-3">
+      Optional — attach the GC control file alongside the raw data.
+      The control file defines the names of the GC file columns.
+    </p>
+
+    <label class="form-label fw-semibold">Control file</label>
+    <div class="input-group mb-1">
+      <input id="gc-ctrl-path-{{ _gc_uid }}" type="text" class="form-control" readonly
+             placeholder="No file selected" style="background:#e9ecef;" />
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="gcBrowseControl_{{ _gc_uid }}()">Browse…</button>
+      <button class="btn btn-outline-secondary" type="button"
+              onclick="gcClearControl_{{ _gc_uid }}()" title="Clear">&#x2715;</button>
+    </div>
+    <div class="form-text mb-3">The raw data file above is required; this is an optional companion.</div>
+
+    <div id="gc-channel-info-{{ _gc_uid }}" class="d-none">
+      <label class="form-label fw-semibold">Channel 1 columns</label>
+      <div id="gc-channel-cols-{{ _gc_uid }}" class="text-muted small"></div>
+    </div>
+    <div id="gc-ctrl-error-{{ _gc_uid }}" class="alert alert-warning py-2 small d-none"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  window._instrumentPanelClearers   = window._instrumentPanelClearers   || {};
+  window._instrumentExtraFiles      = window._instrumentExtraFiles      || {};
+  window._instrumentScientificMetadata = window._instrumentScientificMetadata || {};
+
+  const _INST_NAME = {{ instrument_name | tojson }};
+  const _UID = '{{ _gc_uid }}';
+
+  function _el(suffix) {
+    return document.getElementById('gc-' + suffix + '-' + _UID);
+  }
+
+  let _gcCtrlPath = '';
+  let _ch1Columns = [];
+
+  function _gcClear() {
+    _gcCtrlPath = '';
+    _ch1Columns = [];
+    _el('ctrl-path').value = '';
+    _el('channel-info').classList.add('d-none');
+    _el('channel-cols').textContent = '';
+    _el('ctrl-error').classList.add('d-none');
+  }
+
+  window._instrumentPanelClearers[_INST_NAME]      = _gcClear;
+  window._instrumentExtraFiles[_INST_NAME]         = () => _gcCtrlPath ? [_gcCtrlPath] : [];
+  window._instrumentScientificMetadata[_INST_NAME] = () =>
+    _ch1Columns.length ? { gc: { GC_column_names: _ch1Columns } } : null;
+
+  window['gcBrowseControl_' + _UID] = async function () {
+    try {
+      const res  = await fetch('/api/browse');
+      const data = await res.json();
+      if (!res.ok) { showStatus(data.error || 'Browse failed.', 'danger'); return; }
+      const paths = data.paths || [];
+      if (!paths.length) return;
+      _gcCtrlPath = paths[0];
+      _el('ctrl-path').value = _gcCtrlPath;
+      await _gcParseControl(_gcCtrlPath);
+    } catch (e) {
+      showStatus('Browse error: ' + e.message, 'danger');
+    }
+  };
+
+  async function _gcParseControl(filePath) {
+    const errEl  = _el('ctrl-error');
+    const infoEl = _el('channel-info');
+    const colsEl = _el('channel-cols');
+    errEl.classList.add('d-none');
+    infoEl.classList.add('d-none');
+    colsEl.textContent = '';
+    _ch1Columns = [];
+
+    try {
+      const res  = await fetch('/api/gc/parse_control', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ file: filePath }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.error || 'Could not parse control file.';
+        errEl.classList.remove('d-none');
+        return;
+      }
+      const ch1 = (data.channels || {})['1'];
+      if (!ch1) {
+        errEl.textContent = 'No Channel 1 PRINT FIELDS entry found in this file.';
+        errEl.classList.remove('d-none');
+        return;
+      }
+      _ch1Columns = ch1.columns || [];
+      colsEl.textContent = _ch1Columns.join(', ') || '(none)';
+      infoEl.classList.remove('d-none');
+    } catch (e) {
+      errEl.textContent = 'Parse error: ' + e.message;
+      errEl.classList.remove('d-none');
+    }
+  }
+
+  window['gcClearControl_' + _UID] = _gcClear;
+})();
+</script>

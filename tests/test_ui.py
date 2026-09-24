@@ -62,9 +62,18 @@ class TestApplySampleMetadata(unittest.TestCase):
             "MFP00001",
         )
 
-        self.assertEqual(self.packet.scientific_metadata["anode_material"], "Lithium")
-        self.assertEqual(self.packet.scientific_metadata["cathode_material"], "LFP")
-        self.assertEqual(self.packet.scientific_metadata["electrolyte"], "LP30")
+        self.assertEqual(self.packet.scientific_metadata["anode_material"], {
+            "sample_name": "Lithium",
+            "sample_mfid": "anode-id",
+        })
+        self.assertEqual(self.packet.scientific_metadata["cathode_material"], {
+            "sample_name": "LFP",
+            "sample_mfid": "cathode-id",
+        })
+        self.assertEqual(self.packet.scientific_metadata["electrolyte"], {
+            "sample_name": "LP30",
+            "sample_mfid": "electrolyte-id",
+        })
         self.assertEqual([s["unique_id"] for s in self.packet.samples],
                          ["existing", "anode-id", "cathode-id", "electrolyte-id"])
         self.assertEqual(resolved[-1]["sample_name"], "LP30")

@@ -124,7 +124,7 @@ def find_samples(sample_name: str | None = None, sample_unique_id: str | None = 
         "project_id": project_id,
     }.items() if v is not None}
 
-    found_samples = client.samples.list(**kwargs)
+    found_samples = client.samples.list(**kwargs, limit=10)
 
     if not found_samples:
         logger.warning(f'No sample found with {sample_name=} in project {project_id}. Note: sample names are case sensitive.')
@@ -132,6 +132,58 @@ def find_samples(sample_name: str | None = None, sample_unique_id: str | None = 
         logger.warning(f'Multiple samples found - {found_samples=}')
 
     return [_format_sample(s) for s in found_samples]
+
+
+def apply_sample_metadata(packet, field_map: dict[str, str], values: dict,
+                          project_id: str) -> list[dict]:
+    """Resolve required sample MFIDs, record their identity, and stage their links.
+
+    ``field_map`` maps scientific metadata names to request keys. Looking up by
+    both MFID and project prevents an accidentally pasted sample from another
+    project from being linked. Existing packet samples are preserved.
+    """
+    requested = []
+    for metadata_field, request_field in field_map.items():
+        sample_mfid = str(values.get(request_field) or '').strip()
+        label = metadata_field.replace('_', ' ')
+        if not sample_mfid:
+            raise ValueError(f'{label} sample MFID is required')
+        requested.append((metadata_field, label, sample_mfid))
+
+    resolved = []
+    for metadata_field, label, sample_mfid in requested:
+        matches = find_samples(sample_unique_id=sample_mfid, project_id=project_id)
+        if not matches:
+            raise ValueError(
+                f"No {label} sample found for MFID '{sample_mfid}' in project '{project_id}'"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple {label} samples found for MFID '{sample_mfid}' in project '{project_id}'"
+            )
+
+        sample = matches[0]
+        resolved.append({
+            'unique_id': sample['unique_id'],
+            'sample_name': sample['sample_name'],
+            'metadata_field': metadata_field,
+        })
+
+    for sample in resolved:
+        packet.scientific_metadata[sample['metadata_field']] = {
+            'sample_name': sample['sample_name'],
+            'sample_mfid': sample['unique_id'],
+        }
+
+    packet.samples = _dedup_by(
+        list(packet.samples) + [
+            {k: v for k, v in sample.items() if k != 'metadata_field'}
+            for sample in resolved
+        ],
+        lambda sample: sample.get('unique_id'),
+    )
+    return [{k: v for k, v in sample.items() if k != 'metadata_field'}
+            for sample in resolved]
 
 
 def create_sample(sample_name: str,

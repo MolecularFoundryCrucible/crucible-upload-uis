@@ -27,6 +27,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(funcNam
 app = Flask(__name__)
 app.register_blueprint(voice_bp)
 
+_gc_ec = importlib.import_module("instruments.b30-gc-ec")
+
 # Tkinter must run on the main thread. Flask runs in a background thread.
 # We use two queues to hand off dialog requests/results between threads.
 _tk_root = tk.Tk()
@@ -38,6 +40,19 @@ _browse_result: queue.Queue = queue.Queue()
 # Serializes browse() so only one dialog is ever outstanding, preventing a
 # request from consuming a previous request's leftover result.
 _browse_lock = threading.Lock()
+
+
+def _apply_gc_ec_sample_metadata(packet, instrument_name: str, values: dict,
+                                 project_id: str) -> list[dict]:
+    """Apply the material-sample behavior owned specifically by the GC-EC UI."""
+    if instrument_name != _gc_ec.NAME:
+        return []
+    return backend.apply_sample_metadata(
+        packet,
+        _gc_ec.SAMPLE_METADATA_FIELDS,
+        values,
+        project_id,
+    )
 
 
 def _check_browse_queue():
@@ -494,6 +509,12 @@ def do_preview():
         else:
             dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
         packet, collisions, parsed_by, skipped = backend.parse_for_preview(files, dsid, ingestor)
+        resolved_samples = _apply_gc_ec_sample_metadata(
+            packet,
+            instrument_name,
+            data,
+            project_id,
+        )
     except Exception as e:
         backend.logger.exception("preview failed")
         return jsonify({"error": str(e)}), 400
@@ -547,6 +568,7 @@ def do_preview():
         "actual_ingestor": packet.ingestion_class,
         "skipped": skipped,
         "files": [os.path.basename(p) for p in files],
+        "resolved_samples": resolved_samples,
     })
 
 
@@ -603,9 +625,18 @@ def do_upload():
             packet = backend.load_preview_packet(preview_dsid)
             backend.apply_metadata_edits(packet, data.get("metadata_edits") or {})
             backend.apply_dataset_field_edits(packet, data.get("dataset_field_edits") or {})
+            _apply_gc_ec_sample_metadata(
+                packet,
+                instrument_name,
+                data,
+                project_id,
+            )
             packet.to_json(str(backend.preview_packet_path(preview_dsid)))
         except (ValueError, OSError) as e:
             return jsonify({"error": f"Preview expired or invalid: {e}"}), 400
+        except Exception as e:
+            backend.logger.exception("preview confirmation failed")
+            return jsonify({"error": str(e)}), 500
         try:
             flow_run = run_deployment(
                 "preview-upload/preview-upload",

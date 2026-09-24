@@ -226,7 +226,8 @@
 
         <!-- Per-instrument panels (each rendered server-side; JS shows the active one) -->
         {% for instrument_name, tmpl in panel_templates.items() %}
-        <div id="panel-{{ instrument_name }}" class="instrument-panel h-100 d-none">
+        <div id="panel-{{ instrument_name }}"
+             class="instrument-panel {% if instrument_name == 'gc-b30-001' %}mt-4{% else %}h-100{% endif %} d-none">
           {% include tmpl %}
         </div>
         {% endfor %}
@@ -1162,6 +1163,7 @@
       if (!orcid) missing.push("email (look up user first)");
       if (!project_id) missing.push("project");
       if (!instrument_name) missing.push("instrument");
+      missing.push(...((window._instrumentRequiredFields || {})[instrument_name]?.() || []));
       if (state.isSession && !state.selectedPaths[0]) missing.push("session folder");
       if (!state.isSession && state.selectedPaths.length === 0) missing.push("file(s)");
 
@@ -1181,6 +1183,7 @@
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
         keywords: getKeywords(),
+        ...((window._instrumentUploadParams || {})[instrument_name]?.() || {}),
       };
       if (state.isSession) {
         uploadParams.session_folder_path = state.selectedPaths[0];
@@ -1257,7 +1260,9 @@
       const missing = [];
       if (!state.orcid) missing.push("email (look up user first)");
       if (!document.getElementById("project").value) missing.push("project");
-      if (!document.getElementById("instrument").value) missing.push("instrument");
+      const instrument = document.getElementById("instrument").value;
+      if (!instrument) missing.push("instrument");
+      missing.push(...((window._instrumentRequiredFields || {})[instrument]?.() || []));
       if (state.selectedPaths.length === 0) missing.push("file(s)");
       if (missing.length) {
         showStatus("Please fill in: " + missing.join(", ") + ".", "danger");
@@ -1278,6 +1283,7 @@
         sample_unique_id: document.getElementById("sample-uid").value.trim() || null,
         comments: document.getElementById("comments").value.trim(),
         keywords: getKeywords(),
+        ...((window._instrumentUploadParams || {})[document.getElementById("instrument").value]?.() || {}),
       };
 
       askGrouping(asOne => {
@@ -1691,7 +1697,11 @@
       const hasPanel = !!panel;
       if (panel) panel.classList.remove('d-none');
 
-      document.getElementById("sample-info-card").classList.toggle("d-none", hasPanel);
+      // GC-EC keeps the normal measured-sample card and adds its material fields below.
+      const panelKeepsDefaultSample = instrument === 'gc-b30-001';
+      document.getElementById("sample-info-card").classList.toggle(
+        "d-none", hasPanel && !panelKeepsDefaultSample,
+      );
       document.getElementById("btn-upload").classList.toggle("d-none", isMultiAssignment || isPhotobox || isPreview);
       document.getElementById("btn-ma-upload").classList.toggle("d-none", !isMultiAssignment);
       document.getElementById("btn-pb-upload").classList.toggle("d-none", !isPhotobox);
@@ -2171,6 +2181,7 @@
       _pendingUploadParams = null;
       _selectedSessionDsid = null;
       _clearNirvanaUI();
+      Object.values(window._instrumentPanelClearers || {}).forEach(clear => clear());
       clearStatus();
     }
 
@@ -2282,6 +2293,7 @@
       document.getElementById("sample-name").value = "";
       document.getElementById("sample-uid").value = "";
       document.getElementById("description").value = "";
+      Object.values(window._instrumentPanelClearers || {}).forEach(clear => clear());
       document.getElementById("comments").value = "";
       if (typeof _keywords !== "undefined") {
         _keywords = [];

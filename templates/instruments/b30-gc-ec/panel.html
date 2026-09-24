@@ -1,0 +1,138 @@
+<div class="card shadow-sm">
+  <div class="card-body">
+    <h5 class="card-title text-primary mb-1">Additional Information</h5>
+    <p class="text-muted small mb-3">
+      Scan the Crucible sample MFID for each material. These samples will be
+      linked to the dataset and their sample names saved as scientific metadata.
+    </p>
+
+    <div class="border rounded bg-light p-3">
+      <label class="form-label fw-semibold" for="gc-anode-mfid">Anode Material:</label>
+      <div class="input-group mb-1">
+        <input id="gc-anode-mfid" type="text" class="form-control"
+               placeholder="Scan sample MFID"
+               oninput="gcMaterialChanged('anode')"
+               onkeydown="if(event.key==='Enter') gcLookupMaterial('anode')" />
+        <button class="btn btn-outline-primary" type="button" onclick="gcLookupMaterial('anode')"
+                aria-label="Look up anode material sample">
+          <span id="spinner-gc-anode" class="spinner-border spinner-border-sm d-none" role="status"></span>
+          <span id="icon-gc-anode">&#128270;</span>
+        </button>
+      </div>
+      <div id="gc-anode-name" class="form-text mb-3">Not looked up</div>
+
+      <label class="form-label fw-semibold" for="gc-cathode-mfid">Cathode Material:</label>
+      <div class="input-group mb-1">
+        <input id="gc-cathode-mfid" type="text" class="form-control"
+               placeholder="Scan sample MFID"
+               oninput="gcMaterialChanged('cathode')"
+               onkeydown="if(event.key==='Enter') gcLookupMaterial('cathode')" />
+        <button class="btn btn-outline-primary" type="button" onclick="gcLookupMaterial('cathode')"
+                aria-label="Look up cathode material sample">
+          <span id="spinner-gc-cathode" class="spinner-border spinner-border-sm d-none" role="status"></span>
+          <span id="icon-gc-cathode">&#128270;</span>
+        </button>
+      </div>
+      <div id="gc-cathode-name" class="form-text mb-3">Not looked up</div>
+
+      <label class="form-label fw-semibold" for="gc-electrolyte-mfid">Electrolyte:</label>
+      <div class="input-group mb-1">
+        <input id="gc-electrolyte-mfid" type="text" class="form-control"
+               placeholder="Scan sample MFID"
+               oninput="gcMaterialChanged('electrolyte')"
+               onkeydown="if(event.key==='Enter') gcLookupMaterial('electrolyte')" />
+        <button class="btn btn-outline-primary" type="button" onclick="gcLookupMaterial('electrolyte')"
+                aria-label="Look up electrolyte sample">
+          <span id="spinner-gc-electrolyte" class="spinner-border spinner-border-sm d-none" role="status"></span>
+          <span id="icon-gc-electrolyte">&#128270;</span>
+        </button>
+      </div>
+      <div id="gc-electrolyte-name" class="form-text">Not looked up</div>
+    </div>
+
+    <hr class="my-4" />
+
+    <label class="form-label fw-semibold" for="gc-default-parameters-mfid">Default Parameters:</label>
+    <input id="gc-default-parameters-mfid" type="text" class="form-control"
+           placeholder="Scan default parameter dataset MFID" />
+    <div class="form-text">
+      Placeholder only — importing scientific metadata from this dataset is not implemented yet.
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const instrument = 'gc-b30-001';
+  const materialKinds = ['anode', 'cathode', 'electrolyte'];
+  window._instrumentPanelClearers = window._instrumentPanelClearers || {};
+  window._instrumentUploadParams = window._instrumentUploadParams || {};
+  window._instrumentRequiredFields = window._instrumentRequiredFields || {};
+
+  function input(kind) { return document.getElementById(`gc-${kind}-mfid`); }
+  function name(kind) { return document.getElementById(`gc-${kind}-name`); }
+
+  function nameClass(kind, stateClass = '') {
+    return `form-text${stateClass ? ` ${stateClass}` : ''}${kind !== 'electrolyte' ? ' mb-3' : ''}`;
+  }
+
+  function clear() {
+    for (const kind of materialKinds) {
+      input(kind).value = '';
+      name(kind).textContent = 'Not looked up';
+      name(kind).className = nameClass(kind);
+    }
+    document.getElementById('gc-default-parameters-mfid').value = '';
+  }
+
+  window.gcMaterialChanged = function (kind) {
+    name(kind).textContent = 'Not looked up';
+    name(kind).className = nameClass(kind, 'text-muted');
+  };
+
+  window.gcLookupMaterial = async function (kind) {
+    const sampleMfid = input(kind).value.trim();
+    const projectId = document.getElementById('project').value;
+    if (!sampleMfid) return;
+    if (!projectId) { showStatus('Select a project first.', 'warning'); return; }
+
+    setSpinner(`gc-${kind}`, true);
+    clearStatus();
+    try {
+      const res = await fetch('/api/sample/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sample_unique_id: sampleMfid, project_id: projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        name(kind).textContent = data.error || 'Sample lookup failed';
+        name(kind).className = nameClass(kind, 'text-danger');
+        return;
+      }
+      input(kind).value = data.unique_id;
+      name(kind).textContent = data.sample_name;
+      name(kind).className = nameClass(kind, 'text-success');
+    } catch (e) {
+      name(kind).textContent = 'Sample lookup failed: ' + e.message;
+      name(kind).className = nameClass(kind, 'text-danger');
+    } finally {
+      setSpinner(`gc-${kind}`, false);
+    }
+  };
+
+  window._instrumentPanelClearers[instrument] = clear;
+  window._instrumentUploadParams[instrument] = () => ({
+    anode_sample_mfid: input('anode').value.trim(),
+    cathode_sample_mfid: input('cathode').value.trim(),
+    electrolyte_sample_mfid: input('electrolyte').value.trim(),
+  });
+  window._instrumentRequiredFields[instrument] = () => {
+    const missing = [];
+    for (const kind of materialKinds) {
+      if (!input(kind).value.trim()) missing.push(`${kind} sample MFID`);
+    }
+    return missing;
+  };
+})();
+</script>

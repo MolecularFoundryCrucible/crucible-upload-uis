@@ -28,6 +28,72 @@ class TestGetEmiFileName(unittest.TestCase):
         assert pb.get_emi_file_name("sample_042.ser") == "sample.emi"
 
 
+# ── GC-EC electrode sample resolution ───────────────────────────────────────
+
+class TestApplySampleMetadata(unittest.TestCase):
+    def setUp(self):
+        self.packet = MagicMock()
+        self.packet.scientific_metadata = {
+            "anode_material": "value parsed from file",
+        }
+        self.packet.samples = [{"unique_id": "existing", "sample_name": "Existing"}]
+        self.fields = {
+            "anode_material": "anode_sample_mfid",
+            "cathode_material": "cathode_sample_mfid",
+            "electrolyte": "electrolyte_sample_mfid",
+        }
+
+    @patch.object(pb, "find_samples")
+    def test_records_names_and_stages_samples_for_linking(self, find_samples):
+        find_samples.side_effect = [
+            [{"unique_id": "anode-id", "sample_name": "Lithium"}],
+            [{"unique_id": "cathode-id", "sample_name": "LFP"}],
+            [{"unique_id": "electrolyte-id", "sample_name": "LP30"}],
+        ]
+
+        resolved = pb.apply_sample_metadata(
+            self.packet,
+            self.fields,
+            {
+                "anode_sample_mfid": "anode-id",
+                "cathode_sample_mfid": "cathode-id",
+                "electrolyte_sample_mfid": "electrolyte-id",
+            },
+            "MFP00001",
+        )
+
+        self.assertEqual(self.packet.scientific_metadata["anode_material"], "Lithium")
+        self.assertEqual(self.packet.scientific_metadata["cathode_material"], "LFP")
+        self.assertEqual(self.packet.scientific_metadata["electrolyte"], "LP30")
+        self.assertEqual([s["unique_id"] for s in self.packet.samples],
+                         ["existing", "anode-id", "cathode-id", "electrolyte-id"])
+        self.assertEqual(resolved[-1]["sample_name"], "LP30")
+        find_samples.assert_any_call(sample_unique_id="anode-id", project_id="MFP00001")
+
+    def test_requires_every_configured_sample_mfid(self):
+        with self.assertRaisesRegex(ValueError, "cathode material sample MFID is required"):
+            pb.apply_sample_metadata(
+                self.packet,
+                self.fields,
+                {"anode_sample_mfid": "anode-id"},
+                "MFP00001",
+            )
+
+    @patch.object(pb, "find_samples", return_value=[])
+    def test_rejects_sample_outside_selected_project(self, _find_samples):
+        with self.assertRaisesRegex(ValueError, "No anode material sample found"):
+            pb.apply_sample_metadata(
+                self.packet,
+                self.fields,
+                {
+                    "anode_sample_mfid": "wrong-project",
+                    "cathode_sample_mfid": "cathode-id",
+                    "electrolyte_sample_mfid": "electrolyte-id",
+                },
+                "MFP00001",
+            )
+
+
 # ── prefect_backend.check_session_depth ──────────────────────────────────────
 
 class TestCheckSessionDepth(unittest.TestCase):

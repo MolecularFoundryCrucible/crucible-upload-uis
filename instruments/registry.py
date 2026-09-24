@@ -25,5 +25,7 @@ INSTRUMENT_FILE_TYPES     = {m.NAME: m.ACCEPTABLE_FILE_TYPES for m in _MODS if g
 POST_PROCESSING_REQUESTS  = {m.NAME: m.POST_PROCESSING for m in _MODS if m.POST_PROCESSING}
 FILE_PARSERS              = {m.NAME: m.FILE_PARSER for m in _MODS if m.FILE_PARSER}
 PANEL_TEMPLATES           = {m.NAME: m.PANEL_TEMPLATE for m in _MODS if m.PANEL_TEMPLATE}
+SAMPLE_METADATA_FIELDS    = {m.NAME: m.SAMPLE_METADATA_FIELDS for m in _MODS
+                             if getattr(m, 'SAMPLE_METADATA_FIELDS', None)}
 INSTRUMENT_MFIDS          = {m.NAME: m.INSTRUMENT_MFID for m in _MODS if getattr(m, 'INSTRUMENT_MFID', None)}
 INSTRUMENT_IDS            = {m.NAME: m.INSTRUMENT_ID for m in _MODS if getattr(m, 'INSTRUMENT_ID', None)}

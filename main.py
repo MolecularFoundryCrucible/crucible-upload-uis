@@ -490,6 +490,12 @@ def do_preview():
         else:
             dsid, reused = backend.resolve_dsid_for_file(files[0], valid)
         packet, collisions, parsed_by, skipped = backend.parse_for_preview(files, dsid, ingestor)
+        resolved_samples = backend.apply_sample_metadata(
+            packet,
+            registry.SAMPLE_METADATA_FIELDS.get(instrument_name, {}),
+            data,
+            project_id,
+        )
     except Exception as e:
         backend.logger.exception("preview failed")
         return jsonify({"error": str(e)}), 400
@@ -541,6 +547,7 @@ def do_preview():
         "actual_ingestor": packet.ingestion_class,
         "skipped": skipped,
         "files": [os.path.basename(p) for p in files],
+        "resolved_samples": resolved_samples,
     })
 
 
@@ -597,9 +604,18 @@ def do_upload():
             packet = backend.load_preview_packet(preview_dsid)
             backend.apply_metadata_edits(packet, data.get("metadata_edits") or {})
             backend.apply_dataset_field_edits(packet, data.get("dataset_field_edits") or {})
+            backend.apply_sample_metadata(
+                packet,
+                registry.SAMPLE_METADATA_FIELDS.get(instrument_name, {}),
+                data,
+                project_id,
+            )
             packet.to_json(str(backend.preview_packet_path(preview_dsid)))
         except (ValueError, OSError) as e:
             return jsonify({"error": f"Preview expired or invalid: {e}"}), 400
+        except Exception as e:
+            backend.logger.exception("preview confirmation failed")
+            return jsonify({"error": str(e)}), 500
         try:
             flow_run = run_deployment(
                 "preview-upload/preview-upload",

@@ -221,6 +221,17 @@ EDITABLE_FIELDS = {
     "PRINTER_ID": "str",
 }
 
+# Fallback used when a local instrument_conf.py predates a field (e.g. after a
+# pull that adds a new setting) — keeps the config panel usable instead of 500ing.
+_KIND_DEFAULTS = {
+    "str": "",
+    "bool": False,
+    "list_str": [],
+    "set_str": set(),
+    "dict_str": {},
+    "dict_list": {},
+}
+
 
 def _to_json(kind, value):
     return sorted(value) if kind == "set_str" else value
@@ -282,17 +293,22 @@ def _write_config(values):
             if target in values:
                 spans[target] = (node.lineno, node.end_lineno)
 
+    # Fields with no existing assignment (e.g. a field introduced after this
+    # machine's local file was created) are appended rather than rejected.
+    present = [k for k in values if k in spans]
     missing = [k for k in values if k not in spans]
-    if missing:
-        raise ValueError(f"Could not locate assignments for: {', '.join(missing)}")
 
     # Replace bottom-to-top so earlier line numbers stay valid.
-    for name in sorted(values, key=lambda k: spans[k][0], reverse=True):
+    for name in sorted(present, key=lambda k: spans[k][0], reverse=True):
         start, end = spans[name]
         replacement = f"{name} = {_format_literal(values[name])}\n"
         lines[start - 1:end] = [replacement]
 
     new_src = "".join(lines)
+    if missing:
+        if new_src and not new_src.endswith("\n"):
+            new_src += "\n"
+        new_src += "".join(f"{name} = {_format_literal(values[name])}\n" for name in missing)
     compile(new_src, CONFIG_PATH, "exec")  # reject anything that wouldn't import
 
     with open(CONFIG_PATH, "w") as f:
@@ -302,7 +318,10 @@ def _write_config(values):
 
 @app.get("/api/config")
 def get_config():
-    return jsonify({name: _to_json(kind, getattr(conf, name)) for name, kind in EDITABLE_FIELDS.items()})
+    return jsonify({
+        name: _to_json(kind, getattr(conf, name, _KIND_DEFAULTS[kind]))
+        for name, kind in EDITABLE_FIELDS.items()
+    })
 
 
 @app.post("/api/config")
@@ -316,7 +335,7 @@ def save_config():
         return jsonify({"error": "No settings provided"}), 400
 
     # Cross-field check: default instrument must be known to the registry.
-    default = values.get("DEFAULT_INSTRUMENT_NAME", conf.DEFAULT_INSTRUMENT_NAME)
+    default = values.get("DEFAULT_INSTRUMENT_NAME", getattr(conf, "DEFAULT_INSTRUMENT_NAME", ""))
     if default and default not in registry.INSTRUMENTS:
         return jsonify({"error": f"Default instrument '{default}' is not a registered instrument"}), 400
 

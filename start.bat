@@ -1,4 +1,3 @@
-call "c:\programdata\anaconda3\condabin\conda.bat" activate
 cd /d "%~dp0"
 
 :: Kill any leftover processes from a previous run

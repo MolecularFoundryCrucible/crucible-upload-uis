@@ -224,10 +224,14 @@ def print_sample_barcode(sample_unique_id, sample_name):
     return
 
 
-def get_emi_file_name(serfile: str) -> str:
-    no_ext = serfile.split(".ser")[0]
-    no_rep = re.sub('_[0-9]*$', '', no_ext)
-    return f"{no_rep}.emi"
+def get_emi_file_name(ser_path: Path) -> str:
+    """Find the corresponding EMI file for a SER file.
+    """
+    if isinstance(ser_path, str):
+        ser_path = Path(ser_path)
+    # Remove trailing _# from the stem and change extension to .emi
+    stem = re.sub(r'_\d+$', '', ser_path.stem)
+    return str(ser_path.with_name(f"{stem}.emi"))
 
 def instrument_ids_from_name(instrument_name: str | None) -> tuple[str | None, str | None]:
     """Returns (instrument_id, instrument_mfid) for the given instrument config name."""
@@ -1138,8 +1142,20 @@ def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid:
     for f, (dsid, existed) in zip(session_files, resolved):
         time.sleep(0.3)
         dsfiles = [f]
+        f_path = Path(f)
+
         if f.endswith('ser'):
-            dsfiles.append(get_emi_file_name(f))
+            dsfiles.append(get_emi_file_name(f_path))
+
+        # Add extra files for FEI MRC tomography datasets: .rawtlt and .txt (FEI parameters)
+        if f_path.suffix.lower() == '.mrc':
+            rawtltName = f_path.with_suffix('.rawtlt')
+            if rawtltName.exists():
+                dsfiles.append(str(rawtltName))
+
+            FEIparameters = f_path.with_suffix('.txt')
+            if FEIparameters.exists():
+                dsfiles.append(str(FEIparameters))
 
         logger.info(f"{Path(f).name}: {'reusing existing' if existed else 'new'} dsid {dsid}")
 

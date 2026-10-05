@@ -22,22 +22,29 @@ In all modes, uploaded datasets are linked to the provided sample(s), user, and 
 
 Once data is uploaded, it can be viewed in the [Crucible Web Explorer](https://crucible.lbl.gov/explore)!
 
-### System requirements
+
+### Prerequisites
 - internet connection
 - access to the local file system
 - python >= 3.13
-- (recommended) [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) `pipx install uv`
+- **Install git.** On windows you can download the .exe file from [here] (https://git-scm.com/install/windows). Run the .exe file. In most cases the recommended settings will be fine. 
+- **Install uv** [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) `pipx install uv`
+
+On Windows use powershell: <br>
+1. ```powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"```
+2. Set the environment variable in powershell as instructed
+
 
 ### Set Up
-1. Clone this repository `git clone https://github.com/MolecularFoundryCrucible/crucible-upload-uis.git`
-2. Create the uv virtual environment
+1. Clone this repository `git clone https://github.com/MolecularFoundryCrucible/crucible-upload-uis.git`.  If you are on windows, it might be easiest to do this from a git bash terminal. 
+2. Create the uv virtual environment. If you are on windows, run this from a command prompt. 
 ```
 cd crucible-upload-uis
 uv sync
 ```
-3. Configure crucible (note: please reach out to the Crucible team for help with setting up an instrument service account)
+3. Configure crucible (note: please reach out to the Crucible team for help with setting up an instrument service account, then use the API key for that service account)
 ```
-crucible config init
+uv run crucible config init
 ```
 4. (Optional) If this machine will print sample barcodes, copy `env.sample` to `.env` and fill
    in the MQTT credentials — reach out to the development team for these:
@@ -55,7 +62,7 @@ cd crucible-upload-uis
 ./start.sh
 ```
 
-**Windows:**
+**Windows (command prompt):**
 ```
 cd crucible-upload-uis
 start.bat

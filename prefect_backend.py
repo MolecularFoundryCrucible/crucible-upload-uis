@@ -1003,11 +1003,11 @@ def task_request_post_processing(name: str, new_ds_dsid: str):
 def _run_post_processing(instrument_name: str, dsid: str):
     """Dispatch the instrument's configured post-processing requests for a dataset.
     CHAIN_POST_PROCESSING runs them inline so they finish before the flow ends."""
-    from instruments.registry import POST_PROCESSING_REQUESTS
-    from instrument_conf import CHAIN_POST_PROCESSING
+    from instruments.registry import POST_PROCESSING_REQUESTS, CHAIN_POST_PROCESSING
 
+    chain = CHAIN_POST_PROCESSING.get(instrument_name, True)
     for name in POST_PROCESSING_REQUESTS.get(instrument_name, []):
-        if CHAIN_POST_PROCESSING:
+        if chain:
             task_request_post_processing(name, dsid)
         else:
             task_request_post_processing.submit(name, dsid)

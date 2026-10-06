@@ -9,5 +9,6 @@ IS_SESSION = False
 ACCEPTABLE_FILE_TYPES = {'.h5', '.yaml'}
 FLOW = None
 POST_PROCESSING = []
+CHAIN_POST_PROCESSING = True
 PANEL_TEMPLATE = 'instruments/spinbot_spinrun/panel.html'
-FILE_PARSER = None
+LIVE_PARSER = None

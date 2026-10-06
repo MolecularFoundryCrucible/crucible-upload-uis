@@ -10,5 +10,6 @@ DEFAULT_HOLDER_LAYOUT = ''
 IS_SESSION = False
 FLOW = None
 POST_PROCESSING = []
+CHAIN_POST_PROCESSING = True
 PANEL_TEMPLATE = 'instruments/inorganic_xrd/panel.html'
-FILE_PARSER = parse_xrd_file
+LIVE_PARSER = parse_xrd_file

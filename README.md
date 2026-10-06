@@ -46,12 +46,7 @@ uv sync
 ```
 uv run crucible config init
 ```
-4. (Optional) If this machine will print sample barcodes, copy `env.sample` to `.env` and fill
-   in the MQTT credentials — reach out to the development team for these:
-```
-cp env.sample .env
-```
-5. Run the app!
+4. Run the app!
 
 ### Running the app
 The app runs as three coordinated processes: a local **Prefect server** (orchestration), **`serve_flows.py`** (registers and serves the upload flows as Prefect deployments), and the **Flask UI** (`main.py`). The provided start scripts launch all three together and shut them down on exit.
@@ -113,7 +108,7 @@ Per-machine settings live in `instrument_conf.py`, created automatically on firs
 |---|---|
 | `DEFAULT_BROWSE_DIR` | Folder the file browser opens to by default |
 | `DEFAULT_INSTRUMENT_NAME` | Instrument pre-selected when the app opens |
-| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs). Leave blank to disable barcode printing entirely — requires a local `.env` file (copy from `env.sample`) with `MQTT_USERNAME`/`MQTT_PASSWORD` for the `crucible-printers` broker; reach out to the development team for these credentials |
+| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs). Leave blank to disable barcode printing entirely. Printing goes through crucible-api's `/print/barcode` endpoint using this machine's existing Crucible API key — no separate MQTT credentials or `.env` file are needed |
 
 Session mode, post-processing, and the default ingestor are all instrument properties, not per-machine settings — see [Adding a New Instrument](#adding-a-new-instrument).
 

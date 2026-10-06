@@ -112,12 +112,10 @@ Per-machine settings live in `instrument_conf.py`, created automatically on firs
 | Setting | Meaning |
 |---|---|
 | `DEFAULT_BROWSE_DIR` | Folder the file browser opens to by default |
-| `IS_SESSION` | Global fallback for session vs. file mode, used when an instrument doesn't set its own `IS_SESSION` (see [Adding a New Instrument](#adding-a-new-instrument)) |
 | `DEFAULT_INSTRUMENT_NAME` | Instrument pre-selected when the app opens |
-| `DEFAULT_INGESTOR` | Ingestor class pre-selected when an instrument is chosen |
-| `CHAIN_POST_PROCESSING` | Whether an instrument's post-processing requests run sequentially (`True`) or in parallel (`False`) |
-| `PRINT_BARCODE_ENABLED` | Enables the sample barcode printing integration — see the comment block in `instrument_conf.default.py` for setup. Requires a local `.env` file (copy from `env.sample`) with `MQTT_USERNAME`/`MQTT_PASSWORD` for the `crucible-printers` broker; reach out to the development team for these credentials |
-| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs) |
+| `PRINTER_ID` | ID of the [crucible-label-printer](https://github.com/MolecularFoundryCrucible/crucible-label-printer) Raspberry Pi this machine prints to (see that repo's Ansible inventory for valid IDs). Leave blank to disable barcode printing entirely — requires a local `.env` file (copy from `env.sample`) with `MQTT_USERNAME`/`MQTT_PASSWORD` for the `crucible-printers` broker; reach out to the development team for these credentials |
+
+Session mode, post-processing, and the default ingestor are all instrument properties, not per-machine settings — see [Adding a New Instrument](#adding-a-new-instrument).
 
 ## Adding a New Instrument
 
@@ -136,13 +134,15 @@ NAME = 'my_instrument'          # internal key; matches the dropdown value
 INGESTOR = ''                   # default crucible-ingestion ingestor class name, or '' to auto-detect by file type
 INSTRUMENT_ID = ''              # Crucible instrument slug (optional, but highly recommended, see below)
 INSTRUMENT_MFID = ''            # Crucible instrument MFID (optional, but highly recommended, see below)
-UI_MODE = 'standard'            # 'standard' or 'multi_assignment' — see below
-HOLDER_LAYOUTS = {}
-DEFAULT_HOLDER_LAYOUT = ''
+UI_MODE = 'standard'            # 'standard', 'preview', 'carrier_photo', or 'multi_assignment' — see below
+HOLDER_LAYOUTS = {}              # physical tray/holder layouts for multi_assignment panels, e.g. {'Tray 2×8': [...]} — see below
+DEFAULT_HOLDER_LAYOUT = ''       # which key of HOLDER_LAYOUTS is preselected
+IS_SESSION = False               # see "Session mode" below
 FLOW = None
 POST_PROCESSING = []
-PANEL_TEMPLATE = None
-FILE_PARSER = None
+CHAIN_POST_PROCESSING = True     # run this instrument's POST_PROCESSING requests sequentially (True) or in parallel (False)
+PANEL_TEMPLATE = None            # Jinja partial for a custom panel, required for multi_assignment/carrier_photo — see below
+LIVE_PARSER = None
 ```
 
 The simplest real example is [`instruments/hip_microscope/__init__.py`](instruments/hip_microscope/__init__.py) — every field left at its default above except `NAME`, `INGESTOR`, and the Crucible IDs.
@@ -162,7 +162,7 @@ Both fields are optional — if left unset, uploads fall back to a slugified ver
 
 - **`standard`** (most instruments): the default sample-search-and-upload form. No extra files needed.
 - **`preview`**: replaces Submit with a **Preview upload** button that shows the ingestor's parsed metadata for review/correction before the upload is committed. Not available together with session mode. See `instruments/b30-gc-ec/__init__.py`.
-- **`photobox`**: used by `spinbot_photobox` — a dedicated flow/panel pairing for that instrument's photobox workflow including sample-creation.
+- **`carrier_photo`**: used by `spinbot_photobox` — a dedicated panel for photographing a whole physical sample carrier (e.g. two trays) in one shot; a post-processing step then segments the photo per-slot and links each resulting image to its sample. See `instruments/spinbot_photobox/`.
 - **`multi_assignment`**: a custom panel lets the operator assign different samples to different files (or positions within one file) in a single submission. This requires:
   - `PANEL_TEMPLATE`: a Jinja partial, e.g. `'instruments/my_instrument/panel.html'`, saved at `templates/instruments/my_instrument/panel.html`. It's included server-side into `templates/index.html` and must register its behavior on the client-side dispatch registries so `index.html` can call into it:
     ```javascript
@@ -171,10 +171,10 @@ Both fields are optional — if left unset, uploads fall back to a slugified ver
     window._instrumentPanelClearers = window._instrumentPanelClearers || {};
     window._instrumentPanelClearers['my_instrument'] = function() { /* reset panel */ };
     window._instrumentPanelParsers = window._instrumentPanelParsers || {};
-    window._instrumentPanelParsers['my_instrument'] = function(paths) { /* custom parse instead of FILE_PARSER */ };
+    window._instrumentPanelParsers['my_instrument'] = function(paths) { /* custom parse instead of LIVE_PARSER */ };
     ```
     See [`instruments/nirvana/`](instruments/nirvana/) (tray/holder layout) and [`instruments/inorganic_xrd/`](instruments/inorganic_xrd/) (multi-tab panel) for full examples.
-  - `FILE_PARSER`: a Python callable `(path: str) -> list[dict]` that extracts sample assignments from an uploaded file, used unless a client-side parser above overrides it. See `instruments/nirvana/__init__.py`'s `_parse_nirvana_h5` as an example. Please contact the crucible team for help with advanced parsing, e.g., automated child-dataset creation, sample creation via the uplaoder, etc.
+  - `LIVE_PARSER`: a Python callable `(path: str) -> list[dict]` that extracts sample assignments from an uploaded file, used unless a client-side parser above overrides it. Named for when it runs — live, in the browser upload flow, before anything is submitted — not to be confused with the `INGESTOR` class, which runs server-side during ingestion. See `instruments/nirvana/__init__.py`'s `_parse_nirvana_h5` as an example. Please contact the crucible team for help with advanced parsing, e.g., automated child-dataset creation, sample creation via the uplaoder, etc.
   - `HOLDER_LAYOUTS` / `DEFAULT_HOLDER_LAYOUT`: only needed if the panel displays samples arranged on a physical tray/holder (see `nirvana`'s `Tray 2×8` layout as an example).
 
 ### 4. Session mode (optional)
@@ -188,8 +188,8 @@ See [`instruments/titanx/__init__.py`](instruments/titanx/__init__.py) for a wor
 
 ### 5. Post-processing (optional)
 
-`POST_PROCESSING` is a list of post-processing request names to fire after each dataset is uploaded (e.g. `['insitu_aggregation']`, see [`instruments/insitu_pl/__init__.py`](instruments/insitu_pl/__init__.py)). Whether they run sequentially or in parallel is controlled by the global `CHAIN_POST_PROCESSING` setting. Adding a new post-processing request type requires backend changes in `prefect_backend.py`, not just an instrument config — ask before assuming one exists.
+`POST_PROCESSING` is a list of post-processing request names to fire after each dataset is uploaded (e.g. `['insitu_aggregation']`, see [`instruments/insitu_pl/__init__.py`](instruments/insitu_pl/__init__.py)). Whether they run sequentially (`True`) or in parallel (`False`) is controlled by that instrument's own `CHAIN_POST_PROCESSING` setting. Adding a new post-processing request type requires backend changes in `prefect_backend.py`, not just an instrument config — ask before assuming one exists.
 
 ### A note on domain-specific choices
 
-Fields like `sample_type`, measurement naming conventions, or how a file maps to dataset names are usually driven by the ingestor in `crucible-ingestion`, not by this repo. If you're not sure what a new instrument's `INGESTOR` should be, or whether it needs a custom `FILE_PARSER`/panel at all, check with whoever owns that instrument's data format before writing code — see this repo's `CLAUDE.md` for the same rule applied to AI-assisted changes.
+Fields like `sample_type`, measurement naming conventions, or how a file maps to dataset names are usually driven by the ingestor in `crucible-ingestion`, not by this repo. If you're not sure what a new instrument's `INGESTOR` should be, or whether it needs a custom `LIVE_PARSER`/panel at all, check with whoever owns that instrument's data format before writing code — see this repo's `CLAUDE.md` for the same rule applied to AI-assisted changes.

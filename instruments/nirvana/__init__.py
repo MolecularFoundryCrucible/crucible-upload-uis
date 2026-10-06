@@ -15,6 +15,7 @@ DEFAULT_HOLDER_LAYOUT = 'Tray 2×8'
 IS_SESSION = False
 FLOW = None
 POST_PROCESSING = []
+CHAIN_POST_PROCESSING = True
 PANEL_TEMPLATE = 'instruments/nirvana/panel.html'
 
 
@@ -59,4 +60,4 @@ def _parse_nirvana_h5(path: str) -> list[dict]:
     return samples
 
 
-FILE_PARSER = _parse_nirvana_h5
+LIVE_PARSER = _parse_nirvana_h5

@@ -13,7 +13,6 @@ MQTT_BROKER = os.environ.get("MQTT_BROKER", "mqtt.mfdata.org")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "8883"))
 MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "crucible-printers")
 MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
-MQTT_CA_CERTS = os.environ.get("MQTT_CA_CERTS")  # optional path to CA bundle
 
 
 def send_print_job(printer_id: str, mfid: str, name: str) -> str:
@@ -33,7 +32,7 @@ def send_print_job(printer_id: str, mfid: str, name: str) -> str:
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"upload-ui-{payload['job_id']}")
     client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-    client.tls_set(ca_certs=MQTT_CA_CERTS)
+    client.tls_set()
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_start()
     try:

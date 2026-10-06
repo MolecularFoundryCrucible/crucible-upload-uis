@@ -66,7 +66,7 @@ def _check_browse_queue():
         # Realize/flush the root so the dialog reliably comes to front on macOS,
         # where the first invocation otherwise returns empty.
         _tk_root.update()
-        is_session = registry.INSTRUMENT_SESSION_MODES.get(instrument_name, conf.IS_SESSION)
+        is_session = registry.INSTRUMENT_SESSION_MODES.get(instrument_name, False)
         if is_session:
             kwargs = {"master": _tk_root, "title": "Select session folder"}
             if conf.DEFAULT_BROWSE_DIR:
@@ -94,7 +94,7 @@ def _drain(q: queue.Queue):
 @app.get("/")
 def index():
     return render_template("index.html",
-                           print_barcode_enabled=conf.PRINT_BARCODE_ENABLED,
+                           print_barcode_enabled=bool(conf.PRINTER_ID),
                            crucible_version=crucible.__version__,
                            panel_templates=registry.PANEL_TEMPLATES,
                            holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
@@ -136,8 +136,6 @@ def get_instruments():
         "instruments": instruments,
         "labels": labels,
         "default": conf.DEFAULT_INSTRUMENT_NAME,
-        "default_ingestor": conf.DEFAULT_INGESTOR,
-        "is_session": conf.IS_SESSION,
         "ui_modes": registry.INSTRUMENT_UI_MODE,
         "holder_layouts": registry.INSTRUMENT_HOLDER_LAYOUTS,
         "default_holder_layouts": registry.DEFAULT_HOLDER_LAYOUTS,
@@ -213,11 +211,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instrume
 #   dict_list maps str keys to lists of strings.
 EDITABLE_FIELDS = {
     "DEFAULT_BROWSE_DIR": "str",
-    "IS_SESSION": "bool",
     "DEFAULT_INSTRUMENT_NAME": "str",
-    "DEFAULT_INGESTOR": "str",
-    "CHAIN_POST_PROCESSING": "bool",
-    "PRINT_BARCODE_ENABLED": "bool",
     "PRINTER_ID": "str",
 }
 
@@ -615,8 +609,7 @@ def do_upload():
     kw_list = data.get("keywords", []) or extract_keywords(comments, instrument_name)
 
     # Non-session mode: caller sends a list of file paths; session mode: a single folder path.
-    # Per-instrument IS_SESSION overrides the global config default.
-    is_session = registry.INSTRUMENT_SESSION_MODES.get(instrument_name, conf.IS_SESSION)
+    is_session = registry.INSTRUMENT_SESSION_MODES.get(instrument_name, False)
     if is_session:
         session_folder_path = (data.get("session_folder_path") or "").strip()
         if not session_folder_path:
@@ -792,9 +785,9 @@ def parse_files():
     paths = data.get("files") or []
     if not instrument or not paths:
         return jsonify({"error": "instrument and files required"}), 400
-    parser = registry.FILE_PARSERS.get(instrument)
+    parser = registry.LIVE_PARSERS.get(instrument)
     if parser is None:
-        return jsonify({"error": f"No file parser registered for instrument '{instrument}'"}), 400
+        return jsonify({"error": f"No live parser registered for instrument '{instrument}'"}), 400
     results = []
     for path in paths:
         if not os.path.isfile(path):

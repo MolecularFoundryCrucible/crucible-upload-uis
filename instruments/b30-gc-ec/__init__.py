@@ -8,8 +8,9 @@ DEFAULT_HOLDER_LAYOUT = ''
 IS_SESSION = False
 FLOW = None
 POST_PROCESSING = []
+CHAIN_POST_PROCESSING = True
 PANEL_TEMPLATE = 'instruments/b30-gc-ec/panel.html'
-FILE_PARSER = None
+LIVE_PARSER = None
 
 # Scientific metadata field -> request field containing the Crucible sample MFID.
 # The preview route resolves these to authoritative sample names/MFIDs and adds

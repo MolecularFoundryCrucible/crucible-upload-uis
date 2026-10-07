@@ -27,7 +27,11 @@ class MultipleSessionsFound(Exception):
 
 
 try:
-    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v3')
+    # TEMPORARY: pointed at staging for the print-via-crucible-api end-to-end test.
+    # This is the one shared client (datasets, samples, printing) -- ALL of those go to
+    # staging while this is in place, not just printing. Restore to
+    # 'https://crucible.lbl.gov/api/v3' once testing is done.
+    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/testapi-staging')
     assert client.api_key is not None
     logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
 

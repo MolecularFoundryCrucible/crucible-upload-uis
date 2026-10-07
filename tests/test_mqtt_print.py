@@ -1,29 +1,27 @@
 """Unit tests for mqtt_print.send_print_job's status/error branching against
-crucible-api's POST /print/barcode.
+nano-crucible's client.print.barcode().
 
-A 200 response is not itself success -- the body's "status" field must be checked.
-These tests exist specifically to catch a regression where any 200 gets treated as a
-successful print (silently swallowing "error"/"timeout" outcomes).
+client.print.barcode() itself never raises on a print failure -- it returns a dict
+with status "ok"/"error"/"timeout" regardless, logging a warning on the latter two.
+send_print_job() is the translation layer that turns that into exceptions, since every
+existing caller in this repo (print_sample_barcode/print_tray_barcodes and their Flask
+routes) is exception-based. These tests exist specifically to catch a regression where
+a non-"ok" status gets silently treated as success.
 """
 import unittest
 from unittest.mock import MagicMock, patch
 
+import requests
+
 import mqtt_print
 
 
-def _response(status_code, json_body=None, text=""):
+def _http_error(status_code, detail=None):
     resp = MagicMock()
     resp.status_code = status_code
-    resp.text = text
-    resp.json.return_value = json_body or {}
-    if status_code < 400:
-        resp.raise_for_status.return_value = None
-    else:
-        import requests
-        resp.raise_for_status.side_effect = requests.exceptions.HTTPError(
-            f"{status_code} error", response=resp
-        )
-    return resp
+    return requests.exceptions.HTTPError(
+        f"{status_code} error" + (f": {detail}" if detail else ""), response=resp
+    )
 
 
 class TestSendPrintJob(unittest.TestCase):
@@ -31,52 +29,52 @@ class TestSendPrintJob(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             mqtt_print.send_print_job("", "mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_status_ok_returns_job_id(self, mock_post):
-        mock_post.return_value = _response(200, {
+    @patch("mqtt_print._backend.client")
+    def test_status_ok_returns_job_id(self, mock_client):
+        mock_client.print.barcode.return_value = {
             "job_id": "abc123", "printer_id": "b30-113", "mfid": "mfid",
             "name": "name", "ts": 1.0, "status": "ok", "detail": None,
-        })
+        }
         job_id = mqtt_print.send_print_job("b30-113", "mfid", "name")
         self.assertEqual(job_id, "abc123")
+        mock_client.print.barcode.assert_called_once_with("b30-113", "mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_status_error_raises_with_detail(self, mock_post):
-        mock_post.return_value = _response(200, {
+    @patch("mqtt_print._backend.client")
+    def test_status_error_raises_with_detail(self, mock_client):
+        mock_client.print.barcode.return_value = {
             "job_id": "abc123", "status": "error",
             "detail": "Requested printer not currently online.",
-        })
+        }
         with self.assertRaisesRegex(RuntimeError, "not currently online"):
             mqtt_print.send_print_job("b30-113", "mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_status_timeout_raises(self, mock_post):
-        mock_post.return_value = _response(200, {
+    @patch("mqtt_print._backend.client")
+    def test_status_timeout_raises(self, mock_client):
+        mock_client.print.barcode.return_value = {
             "job_id": "abc123", "status": "timeout", "detail": None,
-        })
+        }
         with self.assertRaisesRegex(RuntimeError, "timeout"):
             mqtt_print.send_print_job("b30-113", "mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_422_raises_value_error_not_runtime_error(self, mock_post):
-        mock_post.return_value = _response(422, {"detail": "mfid is not a valid MFID"})
+    @patch("mqtt_print._backend.client")
+    def test_422_raises_value_error_not_runtime_error(self, mock_client):
+        mock_client.print.barcode.side_effect = _http_error(422, "mfid is not a valid MFID")
         with self.assertRaisesRegex(ValueError, "mfid is not a valid MFID"):
             mqtt_print.send_print_job("b30-113", "bad-mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_server_error_propagates(self, mock_post):
-        import requests
-        mock_post.return_value = _response(500, text="internal error")
+    @patch("mqtt_print._backend.client")
+    def test_server_error_propagates(self, mock_client):
+        mock_client.print.barcode.side_effect = _http_error(500)
         with self.assertRaises(requests.exceptions.HTTPError):
             mqtt_print.send_print_job("b30-113", "mfid", "name")
 
-    @patch("mqtt_print.requests.post")
-    def test_does_not_use_retrying_session(self, mock_post):
-        """Must use a plain requests.post, not CrucibleClient's retry-wrapped session --
-        retrying this call risks double-printing a label (see module docstring)."""
-        mock_post.return_value = _response(200, {"job_id": "x", "status": "ok"})
+    @patch("mqtt_print._backend.client")
+    def test_uses_shared_client_not_a_new_session(self, mock_client):
+        """Must go through the shared CrucibleClient (same api_url/api_key as the rest
+        of this repo), not a standalone request, so there's one URL/client to manage."""
+        mock_client.print.barcode.return_value = {"job_id": "x", "status": "ok"}
         mqtt_print.send_print_job("b30-113", "mfid", "name")
-        mock_post.assert_called_once()
+        mock_client.print.barcode.assert_called_once()
 
 
 if __name__ == "__main__":

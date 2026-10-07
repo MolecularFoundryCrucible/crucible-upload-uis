@@ -434,7 +434,7 @@ wheels = [
 [[package]]
 name = "crucible-ingestion"
 version = "0.1.0"
-source = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion#084fe77de3ff1d9249be98c448a085ff51e62827" }
+source = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion?rev=TEMP-test-print-barcode-wrapper#c8d907f66864874eab78bc444e7a6a6bce9bce1f" }
 dependencies = [
     { name = "aicspylibczi" },
     { name = "h5py" },
@@ -468,10 +468,10 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "crucible-ingestion", git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" },
+    { name = "crucible-ingestion", git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion?rev=TEMP-test-print-barcode-wrapper" },
     { name = "flask", specifier = ">=3.0" },
     { name = "h5py", specifier = ">=3.0" },
-    { name = "nano-crucible", git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=dev" },
+    { name = "nano-crucible", git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=print-barcode-wrapper" },
     { name = "prefect", specifier = ">=3.6.25" },
     { name = "pytest", specifier = ">=9.0.3" },
 ]
@@ -1561,7 +1561,7 @@ wheels = [
 [[package]]
 name = "nano-crucible"
 version = "3.2.1"
-source = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=dev#bb346e711631b1159ba07e5c8efbec84d76ac3bc" }
+source = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible?rev=print-barcode-wrapper#51e63e9f14acfaffe4aa88717c728c13f23c091c" }
 dependencies = [
     { name = "argcomplete" },
     { name = "configupdater" },

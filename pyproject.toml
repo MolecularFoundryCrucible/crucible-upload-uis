@@ -18,5 +18,5 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.uv.sources]
-crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }
-nano-crucible = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible", rev = "dev" }
+crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion", rev = "TEMP-test-print-barcode-wrapper" }
+nano-crucible = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible", rev = "print-barcode-wrapper" }

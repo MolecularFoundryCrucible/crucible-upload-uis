@@ -14,8 +14,8 @@ To enable barcode printing:
 - Set PRINTER_ID to the crucible-label-printer print_id for the printer this
   machine should use (see crucible-label-printer/ansible/inventory.yaml for
   valid IDs, e.g. "b30-113", "ucd1")
-- Copy env.sample to .env in this repo and fill in MQTT_PASSWORD (and
-  MQTT_BROKER/MQTT_USERNAME/MQTT_PORT if they differ from the defaults)
-- Printing is handled by the crucible-label-printer Raspberry Pi fleet over
-  MQTT — no local printer driver or setup is needed on this machine
+- Printing is handled by crucible-api's /print/barcode endpoint, which publishes to
+  the crucible-label-printer Raspberry Pi fleet over MQTT on this machine's behalf —
+  no MQTT credentials, .env file, or local printer driver are needed here; this
+  machine's existing Crucible API key is all that's required
 '''

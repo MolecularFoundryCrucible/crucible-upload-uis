@@ -8,11 +8,9 @@ dependencies = [
     "crucible-ingestion",
     "flask>=3.0",
     "h5py>=3.0",
-    "nano-crucible>=3.2.1",
-    "paho-mqtt>=2.1.0",
+    "nano-crucible>=3.3.0",
     "prefect>=3.6.25",
     "pytest>=9.0.3",
-    "python-dotenv>=1.2.2",
 ]
 
 [tool.pytest.ini_options]

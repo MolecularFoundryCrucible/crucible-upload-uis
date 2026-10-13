@@ -1,45 +1,37 @@
-"""Publishes sample barcode print jobs to a crucible-label-printer over MQTT."""
-import json
-import os
-import time
-import uuid
+"""Submits sample barcode print jobs to crucible-api, which publishes them to a
+crucible-label-printer over MQTT and waits for the result.
 
-import paho.mqtt.client as mqtt
-from dotenv import load_dotenv
+Goes through the same CrucibleClient (and so the same api_url/api_key) used
+everywhere else in this repo, via nano-crucible's client.print.barcode(). That
+method already calls the server with retry=False internally -- the server may
+have already published the MQTT job (and the printer may have already printed
+it) by the time a transient 5xx reaches the caller, so retrying could trigger a
+second, genuinely new print job and double-print the label.
+"""
+import requests
 
-load_dotenv()
-
-MQTT_BROKER = os.environ.get("MQTT_BROKER", "mqtt.mfdata.org")
-MQTT_PORT = int(os.environ.get("MQTT_PORT", "8883"))
-MQTT_USERNAME = os.environ.get("MQTT_USERNAME", "crucible-printers")
-MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD")
+import prefect_backend as _backend
 
 
 def send_print_job(printer_id: str, mfid: str, name: str) -> str:
-    """Publish a print job to crucible-printer/<printer_id>/print. Returns the job_id."""
+    """Submit a print job and wait for the printer to confirm. Returns the job_id.
+
+    Raises ValueError for a malformed request (bad printer_id/mfid) and
+    RuntimeError if the request was valid but the label didn't actually print
+    (status "error" or "timeout").
+    """
     if not printer_id:
         raise RuntimeError("printer_id is required")
-    if not MQTT_PASSWORD:
-        raise RuntimeError("MQTT_PASSWORD must be set (see env.sample)")
 
-    payload = {
-        "job_id": str(uuid.uuid4()),
-        "mfid": mfid,
-        "name": name,
-        "ts": time.time(),
-    }
-    topic = f"crucible-printer/{printer_id}/print"
-
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"upload-ui-{payload['job_id']}")
-    client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-    client.tls_set()
-    client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-    client.loop_start()
     try:
-        info = client.publish(topic, json.dumps(payload), qos=1)
-        info.wait_for_publish(timeout=10)
-    finally:
-        client.loop_stop()
-        client.disconnect()
+        result = _backend.client.print.barcode(printer_id, mfid, name)
+    except requests.exceptions.HTTPError as e:
+        resp = e.response
+        if resp is not None and resp.status_code == 422:
+            raise ValueError(f"Invalid print request: {e}") from e
+        raise
 
-    return payload["job_id"]
+    if result["status"] != "ok":
+        detail = result.get("detail") or f"print job {result['status']}"
+        raise RuntimeError(detail)
+    return result["job_id"]

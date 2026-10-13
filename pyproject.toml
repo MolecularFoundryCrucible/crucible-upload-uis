@@ -8,7 +8,7 @@ dependencies = [
     "crucible-ingestion",
     "flask>=3.0",
     "h5py>=3.0",
-    "nano-crucible>=3.2.1",
+    "nano-crucible>=3.3.0",
     "prefect>=3.6.25",
     "pytest>=9.0.3",
 ]
@@ -19,4 +19,3 @@ testpaths = ["tests"]
 
 [tool.uv.sources]
 crucible-ingestion = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" }
-nano-crucible = { git = "https://github.com/MolecularFoundryCrucible/nano-crucible", rev = "dev" }

@@ -22,6 +22,8 @@ def send_print_job(printer_id: str, mfid: str, name: str) -> str:
     """
     if not printer_id:
         raise RuntimeError("printer_id is required")
+    if _backend.client is None:
+        raise RuntimeError("Crucible client is not configured")
 
     try:
         result = _backend.client.print.barcode(printer_id, mfid, name)

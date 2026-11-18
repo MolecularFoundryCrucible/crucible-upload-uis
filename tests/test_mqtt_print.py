@@ -29,6 +29,11 @@ class TestSendPrintJob(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             mqtt_print.send_print_job("", "mfid", "name")
 
+    def test_requires_configured_client(self):
+        with patch("mqtt_print._backend.client", None):
+            with self.assertRaisesRegex(RuntimeError, "Crucible client is not configured"):
+                mqtt_print.send_print_job("b30-113", "0t6k7ms7r5zak000bwynwcfacr", "name")
+
     @patch("mqtt_print._backend.client")
     def test_status_ok_returns_job_id(self, mock_client):
         mock_client.print.barcode.return_value = {

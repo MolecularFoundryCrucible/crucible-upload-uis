@@ -45,7 +45,13 @@ def _init_crucible_client() -> CrucibleClient | None:
     global client
     client = None
     try:
-        _api_url = os.environ.get('CRUCIBLE_API_URL') or 'https://crucible.lbl.gov/api/v3'
+        _api_url = os.environ.get('CRUCIBLE_API_URL') or 'https://crucible.lbl.gov/api/v4'
+        if _api_url.rstrip('/') == 'https://crucible.lbl.gov/api/v4':
+            try:
+                from crucible.auth.session import carry_sign_in
+                carry_sign_in('https://crucible.lbl.gov/api/v3', _api_url)
+            except Exception:
+                pass
         _client_cls = (
             crucible.CrucibleClient
             if CrucibleClient is _ORIG_CRUCIBLE_CLIENT and crucible.CrucibleClient is not _ORIG_CRUCIBLE_CLIENT

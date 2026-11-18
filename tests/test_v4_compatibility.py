@@ -104,7 +104,7 @@ class HermeticTestCase(unittest.TestCase):
         self.addCleanup(req_patcher.stop)
 
         client = CrucibleClient(
-            api_url="https://crucible.lbl.gov/api/v3",
+            api_url="https://crucible.lbl.gov/api/v4",
             api_key="hermetic-test-api-key",
         )
 
@@ -132,13 +132,15 @@ class TestClientInitialization(HermeticTestCase):
         self.addCleanup(_restore)
 
     def test_init_with_api_key_sets_client_and_ingestion_client(self):
-        fake_client = MagicMock(api_key="secret-key", api_url="https://crucible.lbl.gov/api/v3")
-        with patch.object(pb, "CrucibleClient", return_value=fake_client), \
+        fake_client = MagicMock(api_key="secret-key", api_url="https://crucible.lbl.gov/api/v4")
+        with patch.object(pb, "CrucibleClient", return_value=fake_client) as mock_cls, \
              patch("crucible_ingestion.set_client") as mock_set_client:
+            os.environ.pop("CRUCIBLE_API_URL", None)
             result = pb._init_crucible_client()
 
         self.assertIs(result, fake_client)
         self.assertIs(pb.client, fake_client)
+        mock_cls.assert_called_once_with(api_url="https://crucible.lbl.gov/api/v4")
         mock_set_client.assert_called_once_with(fake_client)
 
     def test_init_with_oauth_session_api_key_none_succeeds_and_sets_ingestion_client(self):

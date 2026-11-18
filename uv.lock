@@ -433,8 +433,8 @@ wheels = [
 
 [[package]]
 name = "crucible-ingestion"
-version = "0.3.0"
-source = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion#3059e3d791a0804aa5236bbf17c36246ce54a2c7" }
+version = "0.3.1"
+source = { git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion#9e887c8ab364be86bbfbfb8f67b79ef4d49f8a03" }
 dependencies = [
     { name = "aicspylibczi" },
     { name = "gdstk" },
@@ -473,7 +473,7 @@ requires-dist = [
     { name = "crucible-ingestion", git = "https://github.com/MolecularFoundryCrucible/crucible-ingestion" },
     { name = "flask", specifier = ">=3.0" },
     { name = "h5py", specifier = ">=3.0" },
-    { name = "nano-crucible", specifier = ">=4.0.0" },
+    { name = "nano-crucible", specifier = ">=4.0.1" },
     { name = "prefect", specifier = ">=3.6.25" },
     { name = "pytest", specifier = ">=9.0.3" },
 ]
@@ -1572,7 +1572,7 @@ wheels = [
 
 [[package]]
 name = "nano-crucible"
-version = "4.0.0"
+version = "4.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argcomplete" },
@@ -1588,9 +1588,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/48/ecfb3e8cbcda093bf7d45db4106cea5ec8e94fa86dd7dab7f5a6d65cc4ec/nano_crucible-4.0.0.tar.gz", hash = "sha256:156b0278d4bba9c5ea48cae3585995cea0940cdd255069e1b1169a630341b070", size = 387276, upload-time = "2026-11-17T23:09:06.23Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/39/48e997956fb666a9aedbbb5d0a3ffa57e236913d2f100c8ec926c2e78314/nano_crucible-4.0.1.tar.gz", hash = "sha256:76ffcc20bdbf0dcfd0ebf2aa5fd1e8e631b16b7540d169fa360d19be4f722b8d", size = 392837, upload-time = "2026-11-18T03:05:21.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/dc/42/0c477926c296fe39408aea9ea60f0e316c40ed4b0b1ad5016f6adf254dcf/nano_crucible-4.0.0-py3-none-any.whl", hash = "sha256:3266cdb55a65d0befc1c10bdc47a59ab4298866275c30db2297b2d8b4d724204", size = 469882, upload-time = "2026-11-17T23:09:04.764Z" },
+    { url = "https://files.pythonhosted.org/packages/58/82/46a6772da7acb458407e9f91315aec855c8c10e3875383d57bcbdec22b33/nano_crucible-4.0.1-py3-none-any.whl", hash = "sha256:9fea48d41cd1767704cf1d7a3469f56a16b7e8b1738a85cb97825cac8b08244b", size = 476634, upload-time = "2026-11-18T03:05:19.869Z" },
 ]
 
 [[package]]

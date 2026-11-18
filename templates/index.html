@@ -1043,7 +1043,7 @@
     let uploadModal = null;
 
     const PREFECT_RUN_URL = "http://127.0.0.1:4200/flow-runs/flow-run/";
-    const CRUCIBLE_EXPLORE_URL = "https://crucible.lbl.gov/explore";
+    const CRUCIBLE_HUB_URL = {{ crucible_hub_url | default("https://crucible.lbl.gov/hub") | tojson }};
 
     function resetUploadModal() {
       document.getElementById("upload-modal-title").textContent = "Submitting...";
@@ -1054,7 +1054,7 @@
       document.getElementById("qr-code").innerHTML = "";
     }
 
-    // Links to the dataset page when a dsid is known, otherwise the project's dataset tab.
+    // Links to the dataset page when a dsid is known, otherwise the project page in Crucible Hub.
     function showUploadSuccess(title, { flow_run_id, project_id, dsid }) {
       document.getElementById("submitting-section").classList.add("d-none");
       document.getElementById("upload-modal-title").textContent = title;
@@ -1062,9 +1062,12 @@
       document.getElementById("success-section").classList.remove("d-none");
       document.getElementById("prefect-link").href = PREFECT_RUN_URL + (flow_run_id || "");
 
+      const hubBase = CRUCIBLE_HUB_URL.replace(/\/+$/, "");
       const linkUrl = dsid
-        ? `${CRUCIBLE_EXPLORE_URL}/${project_id}/datasets/${dsid}`
-        : `${CRUCIBLE_EXPLORE_URL}/${project_id}/#tab=datasets`;
+        ? `${hubBase}/datasets/${encodeURIComponent(dsid)}`
+        : (project_id
+            ? `${hubBase}/projects/${encodeURIComponent(project_id)}`
+            : hubBase);
       document.getElementById("crucible-link").href = linkUrl;
 
       const qrContainer = document.getElementById("qr-code");

@@ -7,14 +7,25 @@ import math
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 import subprocess as sp
 import h5py
+import crucible
+import requests
 from crucible import CrucibleClient
-from crucible.models import Dataset as BaseDataset
+from crucible.models import Dataset as BaseDataset, Sample as BaseSample
+from crucible.utils.identifiers import IdentifierNotFoundError, is_mfid
 import logging
 from prefect import flow, task
 from prefect.logging import get_run_logger
+
+try:
+    from crucible.errors import CrucibleAPIError, NotSignedInError, RemovedError
+except ImportError:  # nano-crucible < 4.0.0 fallback
+    CrucibleAPIError = requests.exceptions.HTTPError
+    NotSignedInError = ValueError
+    RemovedError = TypeError
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -26,20 +37,47 @@ class MultipleSessionsFound(Exception):
         super().__init__(f"Multiple sessions found: {len(sessions)}")
 
 
-try:
-    client = CrucibleClient(api_url = 'https://crucible.lbl.gov/api/v3')
-    assert client.api_key is not None
-    logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
+_ORIG_CRUCIBLE_CLIENT = CrucibleClient
+client: CrucibleClient | None = None
 
-    # otherwise crucible_ingestion lazily builds its own client from local config,
-    # which may point at a different API than the one this UI is talking to
-    import crucible_ingestion
-    crucible_ingestion.set_client(client)
 
-except Exception as e:
-    logger.error(f'Client connection failed with error {e}. \
-                 You can check your Crucible configuration by \
-                 running `crucible config show` in the command line')
+def _init_crucible_client() -> CrucibleClient | None:
+    global client
+    client = None
+    try:
+        _api_url = os.environ.get('CRUCIBLE_API_URL') or 'https://crucible.lbl.gov/api/v3'
+        _client_cls = (
+            crucible.CrucibleClient
+            if CrucibleClient is _ORIG_CRUCIBLE_CLIENT and crucible.CrucibleClient is not _ORIG_CRUCIBLE_CLIENT
+            else CrucibleClient
+        )
+        client = _client_cls(api_url=_api_url)
+        logger.info(f'Connected to Crucible Client with API url: {client.api_url}')
+
+        # otherwise crucible_ingestion lazily builds its own client from local config,
+        # which may point at a different API than the one this UI is talking to
+        import crucible_ingestion
+        crucible_ingestion.set_client(client)
+
+    except (NotSignedInError, Exception) as e:
+        client = None
+        logger.error(
+            f'Client connection failed with error {e}. '
+            'Sign in with `crucible login` (or set CRUCIBLE_API_KEY) and check '
+            '`crucible config show` in the command line.'
+        )
+    return client
+
+
+_init_crucible_client()
+
+
+def _require_client() -> CrucibleClient:
+    if client is None:
+        raise RuntimeError(
+            "Crucible client is not configured. Run `crucible login` or set CRUCIBLE_API_KEY."
+        )
+    return client
 
 
 def run_shell(cmd: str, checkflag: bool = True, background: bool = False) -> sp.CompletedProcess | sp.Popen:
@@ -49,39 +87,72 @@ def run_shell(cmd: str, checkflag: bool = True, background: bool = False) -> sp.
 
 
 
-_ORCID_RE = re.compile(r'^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$')
+_ORCID_RE = re.compile(r'^\d{4}-\d{4}-\d{4}-\d{3}[\dXx]$')
+
+
+def _normalize_user_identifier(identifier: str) -> str:
+    """Normalize whitespace, http(s)://orcid.org/ URL prefixes, and lowercase 'x' ORCID check digits."""
+    clean = (identifier or '').strip()
+    lower = clean.lower()
+    for prefix in ('https://orcid.org/', 'http://orcid.org/'):
+        if lower.startswith(prefix):
+            clean = clean[len(prefix):]
+            break
+    clean = clean.rstrip('/').strip()
+    if _ORCID_RE.match(clean):
+        return clean.upper()
+    return clean
 
 
 def _classify_identifier(identifier: str) -> str:
     """Return 'orcid', 'email', or 'username'."""
-    clean = identifier.strip().split('/')[-1]  # strip https://orcid.org/ prefix if present
+    clean = _normalize_user_identifier(identifier)
     if _ORCID_RE.match(clean):
         return 'orcid'
-    if '@' in identifier:
+    if '@' in clean:
         return 'email'
     return 'username'
 
 
 def lookup_user(identifier: str) -> dict:
     """
-    Look up a user by email, ORCID, or username.
+    Look up a user by email, ORCID, MFID, or username.
 
     Returns a dict with keys:
         name     (str) display name
-        orcid    (str) ORCID identifier
+        orcid    (str) canonical user unique_id (MFID on v4, ORCID on v3)
         projects (list[dict]) list of {project_id, title} dicts for the user's projects
 
     Returns an empty dict if the user is not found.
     """
-    id_type = _classify_identifier(identifier)
-    kwargs = {id_type: identifier.strip()}
-    user_info = client.users.get(**kwargs)
-    logger.info(f"Lookup for {id_type} '{identifier}' returned: {user_info}")
-    if user_info is None:
+    clean_ref = _normalize_user_identifier(identifier)
+    if not clean_ref:
         return {}
 
-    user_name = f"{user_info['first_name']} {user_info['last_name']}"
-    projects = client.projects.list(user_info['unique_id'], limit=None)
+    id_type = _classify_identifier(clean_ref)
+    c = _require_client()
+    try:
+        user_info = c.users.get(clean_ref)
+    except IdentifierNotFoundError:
+        logger.info(f"Lookup for {id_type} '{identifier}' matched no user")
+        return {}
+    except (CrucibleAPIError, requests.exceptions.HTTPError) as e:
+        status = getattr(e, 'status', None)
+        if status is None and getattr(e, 'response', None) is not None:
+            status = e.response.status_code
+        if status == 404:
+            logger.info(f"Lookup for {id_type} '{identifier}' returned 404")
+            return {}
+        raise
+
+    logger.info(f"Lookup for {id_type} '{identifier}' returned: {user_info}")
+    if not user_info:
+        return {}
+
+    first = (user_info.get('first_name') or '').strip()
+    last = (user_info.get('last_name') or '').strip()
+    user_name = f"{first} {last}".strip() or user_info.get('username') or user_info['unique_id']
+    projects = c.users.list_projects(user_info['unique_id'], limit=None)
     project_list = [{'project_id': x['project_id'], 'title': x.get('title') or ''}
                     for x in projects]
     project_list.sort(key=lambda p: p['project_id'])
@@ -96,14 +167,22 @@ def lookup_user_by_email(email: str) -> dict:
 
 
 def _format_sample(sample: dict) -> dict:
-    parts = [f"Type: {sample.get('sample_type', '')}",
-             f"Created: {sample.get('date_created', '')}",
-             sample.get("description", "")]
+    sample_type = sample.get('sample_type') or ''
+    created = (
+        sample.get('creation_time')
+        or sample.get('timestamp')
+        or sample.get('date_created')
+        or ''
+    )
+    desc = sample.get('description') or ''
+    parts = [f"Type: {sample_type}",
+             f"Created: {created}",
+             desc]
     return {
         'unique_id': sample['unique_id'],
         'sample_name': sample['sample_name'],
-        'sample_type': sample.get('sample_type', ''),
-        'date_created': sample.get('date_created', ''),
+        'sample_type': sample_type,
+        'date_created': created,
         'description': "\n".join(p for p in parts if p),
     }
 
@@ -118,16 +197,30 @@ def find_samples(sample_name: str | None = None, sample_unique_id: str | None = 
 
     Each entry has keys: unique_id, sample_name, sample_type, date_created, description
     """
+    if sample_unique_id is not None:
+        sample_unique_id = sample_unique_id.strip()
+        if not is_mfid(sample_unique_id):
+            logger.warning(f"Invalid sample MFID '{sample_unique_id}' passed to find_samples")
+            return []
+
     kwargs = {k: v for k, v in {
         "sample_name": sample_name,
-        "unique_id": sample_unique_id,
+        "mfid": sample_unique_id,
         "project_id": project_id,
     }.items() if v is not None}
 
-    found_samples = client.samples.list(**kwargs, limit=10)
+    try:
+        found_samples = _require_client().samples.list(**kwargs, limit=10)
+    except (CrucibleAPIError, requests.exceptions.HTTPError) as e:
+        status = getattr(e, 'status', None)
+        if status is None and getattr(e, 'response', None) is not None:
+            status = e.response.status_code
+        if status == 404:
+            return []
+        raise
 
     if not found_samples:
-        logger.warning(f'No sample found with {sample_name=} in project {project_id}. Note: sample names are case sensitive.')
+        logger.warning(f'No sample found with {sample_name=} {sample_unique_id=} in project {project_id}. Note: sample names are case sensitive.')
     elif len(found_samples) > 1:
         logger.warning(f'Multiple samples found - {found_samples=}')
 
@@ -193,18 +286,17 @@ def create_sample(sample_name: str,
                   description: str | None = None,
                   timestamp: str | None = None,
                   sample_type: str | None = None) -> dict:
-    
-    kwargs = {k: v for k, v in {
+    sample_kwargs = {k: v for k, v in {
         "unique_id": unique_id,
         "sample_name": sample_name,
         "description": description,
         "timestamp": timestamp,
         "project_id": project_id,
         "sample_type": sample_type,
-        "owner_orcid": owner_orcid,
+        "owner": owner_orcid,
     }.items() if v is not None}
 
-    result = client.samples.create(**kwargs)
+    result = _require_client().samples.create(BaseSample(**sample_kwargs))
 
     logger.info(f"Created sample: {result}")
     return {
@@ -244,21 +336,29 @@ def instrument_ids_from_name(instrument_name: str | None) -> tuple[str | None, s
         # Not a local registry NAME — may be a live Crucible instrument (mfid or slug)
         # selected from the dropdown for an instrument with no local schema.
         try:
-            found = client.instruments.get(instrument_ref=instrument_name)
-            return found.get('instrument_id'), found.get('unique_id')
+            found = _require_client().instruments.get(instrument_ref=instrument_name)
+            if found:
+                return found.get('instrument_id'), found.get('unique_id')
         except Exception:
+            pass
+        if is_mfid(instrument_name):
+            mfid = instrument_name
+        else:
             instrument_id = re.sub(r'[^a-z0-9]', '-', instrument_name.lower())
     return instrument_id, mfid
 
 
 def list_active_instruments() -> list[dict]:
     """Live instrument list from Crucible, for the instrument dropdown."""
-    return client.instruments.list(status='active', limit=500)
+    return _require_client().instruments.list(status='active', limit=500)
 
 
 def search_instruments(q: str) -> list[dict]:
     """Fuzzy instrument search from Crucible, for the instrument autocomplete."""
-    return client.instruments.search(q, limit=20, status='active')
+    clean_q = (q or '').strip()
+    if len(clean_q) < 3:
+        return []
+    return _require_client().instruments.search(clean_q, limit=20, status='active')
 
 
 def check_session_depth(session_folder_path: str, min_depth: int = 1) -> None:
@@ -271,7 +371,7 @@ def check_existing_sessions(session_folder_path: str, orcid: str, project_id: st
     project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
     session_name = Path(session_folder_path).name
     dsname = f'{instrument_name} session: {session_name}'
-    existing = client.datasets.list(owner_orcid=orcid, project_id=project_id, dataset_name=dsname)
+    existing = _require_client().datasets.list(owner_ref=orcid, project_id=project_id, dataset_name=dsname)
     return [
         {
             'unique_id': ds.get('unique_id', ''),
@@ -289,28 +389,28 @@ def create_session(session_folder_path: str, kw_list: list[str], comments: str, 
     project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
     session_name = Path(session_folder_path).name
     dsname = f'{instrument_name} session: {session_name}'
+    c = _require_client()
 
     if session_dsid is not None and session_dsid != "new":
         use_session_dsid = session_dsid
     else:
         instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
         session_ds = BaseDataset(dataset_name=dsname,
-                                owner_orcid=orcid,
+                                owner=orcid,
                                 project_id=project_id,
                                 instrument_id=instrument_id,
                                 instrument_mfid=instrument_mfid,
                                 measurement=f'full {instrument_name} session',
                                 session_name=session_name)
 
-        new_sess_ds = client.datasets.create(session_ds,
-                                            scientific_metadata={'comments': comments},
-                                            keywords=kw_list)
+        new_sess_ds = c.datasets.create(session_ds,
+                                        scientific_metadata={'comments': comments},
+                                        keywords=kw_list)
 
-        use_session_dsid = new_sess_ds['created_record']['unique_id']
+        use_session_dsid = new_sess_ds.get('dataset_mfid') or new_sess_ds['created_record']['unique_id']
 
     if sample_unique_id is not None:
-        client.samples.add_to_dataset(sample_id=sample_unique_id,
-                                      dataset_id=use_session_dsid)
+        c.datasets.link_sample(use_session_dsid, sample_unique_id)
     return session_name, use_session_dsid
 
 
@@ -322,7 +422,7 @@ def existing_dsids(orcid: str, project_id: str) -> set[str]:
     project_id = project_id.replace('Internal Research (', '').replace(')', '').strip()
     return {
         ds['unique_id']
-        for ds in client.datasets.list(owner_orcid=orcid, project_id=project_id, limit=None)
+        for ds in _require_client().datasets.list(owner_ref=orcid, project_id=project_id, limit=None)
         if ds.get('unique_id')
     }
 
@@ -335,7 +435,7 @@ def child_dsids(session_dsid: str) -> set[str]:
     """
     return {
         ds['unique_id']
-        for ds in client.datasets.list_children(parent_dataset_id=session_dsid, limit=None)
+        for ds in _require_client().datasets.list_children(session_dsid, limit=None)
         if ds.get('unique_id')
     }
 
@@ -349,7 +449,7 @@ def resolve_dsid_for_file(file_path: str, valid_dsids: set[str] | None = None) -
     """
     import mfid
     sha = _compute_sha256(file_path)
-    for f in client.files.list(sha256_hash=sha):
+    for f in _require_client().files.list(sha256_hash=sha):
         match_dsid = f.get('dataset_mfid')
         if match_dsid and (valid_dsids is None or match_dsid in valid_dsids):
             return match_dsid, True
@@ -519,10 +619,11 @@ def task_create_dataset(files: list[str],
     logger = get_run_logger()
     kw_list = kw_list or []
 
+    c = _require_client()
     instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
     ds_kwargs = {k: v for k, v in dict(
         unique_id=dsid,
-        owner_orcid=orcid,
+        owner=orcid,
         project_id=project_id,
         instrument_id=instrument_id,
         instrument_mfid=instrument_mfid,
@@ -544,32 +645,38 @@ def task_create_dataset(files: list[str],
     if sample_positions:
         scimd['sample_positions'] = sample_positions
     try:
-        new_ds = client.datasets.create(
+        new_ds = c.datasets.create(
             ds,
             scientific_metadata=scimd,
             keywords=kw_list,
-            files_to_upload=files,
+            files=files,
             ingestor=ingestor or None,
             wait_for_ingestion_response=wait_for_ingestion,
         )
-    except Exception:
-        if dsid:
+    except Exception as exc:
+        is_conflict = (
+            getattr(exc, "status", None) == 409
+            or getattr(getattr(exc, "response", None), "status_code", None) == 409
+        )
+        if dsid and not is_conflict:
             try:
-                associated = client.datasets.list_files(dsid)
+                associated = c.datasets.list_files(dsid)
                 if not any(f.get('storage_path') for f in associated):
-                    client.deletions.request(dsid, reason=f"file upload failed; empty dataset {dsid}")
+                    c.deletions.request(dsid, reason=f"file upload failed; empty dataset {dsid}")
                     logger.warning(f"Upload failed; requested deletion of empty dataset {dsid}")
             except Exception as cleanup_err:
                 logger.error(f"Failed to clean up dataset {dsid}: {cleanup_err}")
         raise
-    new_ds_dsid = new_ds['created_record']['unique_id']
+    new_ds_dsid = new_ds.get('dataset_mfid') or new_ds['created_record']['unique_id']
     logger.info(f"{'Resumed' if dsid else 'Created'} dataset {new_ds_dsid} for {', '.join(Path(f).name for f in files)}")
     return new_ds_dsid
 
 
 def dataset_exists(dsid: str) -> bool:
+    if not dsid or not is_mfid(dsid):
+        return False
     try:
-        return bool(client.datasets.get(dsid))
+        return bool(_require_client().datasets.get(dsid))
     except Exception:
         return False
 
@@ -588,19 +695,51 @@ def task_update_dataset(files: list[str],
                    measurement: str | None = None,
                    data_type: str | None = None,
                    scientific_metadata: dict | None = None,
-                   wait_for_ingestion: bool = False) -> str:
+                   wait_for_ingestion: bool = True,
+                   excluded_uuids: list[str] | None = None) -> str:
     logger = get_run_logger()
+    c = _require_client()
 
     # Ownership, project and instrument belong to the record that already exists; the form
     # only says where this upload came from, so it must not reassign them.
-    existing = client.datasets.get(dsid)
+    existing = c.datasets.get(dsid) or {}
     instrument_id, instrument_mfid = instrument_ids_from_name(instrument_name)
-    for field, value in (('owner_orcid', orcid),
-                         ('project_id', project_id),
-                         ('instrument_id', instrument_id),
-                         ('instrument_mfid', instrument_mfid)):
-        if value and existing.get(field) and existing[field] != value:
-            logger.warning(f"{dsid} has {field}={existing[field]!r}; leaving it as is "
+    owner_obj = existing.get('owner')
+    proj_obj = existing.get('project')
+    inst_obj = existing.get('instrument')
+
+    if isinstance(owner_obj, dict):
+        existing_owner = owner_obj.get('unique_id') or owner_obj.get('orcid') or existing.get('owner_orcid')
+    elif isinstance(owner_obj, str) and owner_obj:
+        existing_owner = owner_obj
+    else:
+        existing_owner = existing.get('owner_orcid')
+
+    if isinstance(proj_obj, dict):
+        existing_project = proj_obj.get('project_id') or proj_obj.get('unique_id') or existing.get('project_id')
+    elif isinstance(proj_obj, str) and proj_obj:
+        existing_project = proj_obj
+    else:
+        existing_project = existing.get('project_id')
+
+    if isinstance(inst_obj, dict):
+        existing_inst_id = inst_obj.get('instrument_id') or existing.get('instrument_id')
+        existing_inst_mfid = inst_obj.get('unique_id') or existing.get('instrument_mfid')
+    elif isinstance(inst_obj, str) and inst_obj:
+        existing_inst_id = existing.get('instrument_id') or (None if is_mfid(inst_obj) else inst_obj)
+        existing_inst_mfid = existing.get('instrument_mfid') or (inst_obj if is_mfid(inst_obj) else None)
+    else:
+        existing_inst_id = existing.get('instrument_id')
+        existing_inst_mfid = existing.get('instrument_mfid')
+
+    for field, current_val, value in (
+        ('owner', existing_owner, orcid),
+        ('project_id', existing_project, project_id),
+        ('instrument_id', existing_inst_id, instrument_id),
+        ('instrument_mfid', existing_inst_mfid, instrument_mfid),
+    ):
+        if value and current_val and current_val != value:
+            logger.warning(f"{dsid} has {field}={current_val!r}; leaving it as is "
                            f"rather than overwriting with {value!r}")
 
     updates = {k: v for k, v in dict(
@@ -610,21 +749,23 @@ def task_update_dataset(files: list[str],
         data_type=data_type,
     ).items() if v is not None}
     if updates:
-        client.datasets.update(dsid, **updates)
+        c.datasets.update(dsid, **updates)
 
     scimd = dict(scientific_metadata or {})
     if comments:
         scimd['comments'] = comments
+    if excluded_uuids:
+        scimd['skipped thin films'] = excluded_uuids
     if scimd:
-        client.datasets.update_scientific_metadata(dsid, scimd)
+        c.datasets.update_scientific_metadata(dsid, scimd)
 
     for kw in kw_list or []:
-        client.datasets.add_keyword(dsid, kw)
+        c.datasets.add_keyword(dsid, kw)
 
     for path in files:
-        client.datasets.add_file(dsid, path,
-                                 ingestion_class=ingestor or None,
-                                 wait_for_ingestion_response=wait_for_ingestion)
+        c.datasets.add_file(dsid, path,
+                            ingestion_class=ingestor or None,
+                            wait_for_ingestion_response=wait_for_ingestion)
 
     logger.info(f"Updated existing dataset {dsid} with {', '.join(Path(f).name for f in files)}")
     return dsid
@@ -633,8 +774,7 @@ def task_update_dataset(files: list[str],
 @task(retries=3, retry_delay_seconds=5)
 def task_link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = None):
     if session_dsid is not None:
-        response = client.datasets.link_parent_child(parent_dataset_id=session_dsid, child_dataset_id=new_ds_dsid)
-        return response
+        return _require_client().datasets.link(parent_mfid=session_dsid, child_mfid=new_ds_dsid)
     return None
 
 
@@ -642,9 +782,10 @@ def task_link_dataset_to_session(new_ds_dsid: str, session_dsid: str | None = No
 def task_link_dataset_and_sample(new_ds_dsid: str, sample_unique_id: str | list[str] | None = None):
     if not sample_unique_id:
         return None
+    c = _require_client()
     uuids = [sample_unique_id] if isinstance(sample_unique_id, str) else sample_unique_id
     for uid in uuids:
-        client.samples.add_to_dataset(dataset_id=new_ds_dsid, sample_id=uid)
+        c.datasets.link_sample(new_ds_dsid, uid)
     return len(uuids)
 
 def list_ingestors() -> list[str]:
@@ -805,18 +946,22 @@ def parse_for_preview(files: list[str], dsid: str,
     collisions: list[dict] = []
     per_file: list[dict] = []
     skipped: list[str] = []
-    for path in files:
-        name = os.path.basename(path)
-        parsed = parse(path, dsid, ingestor_name or None)
-        if parsed is None:
-            logger.warning(f'No ingestor supports {name}; skipping')
-            skipped.append(name)
-            continue
-        per_file.append({'file': name, 'ingestion_class': parsed.ingestion_class})
-        if packet is None:
-            packet = parsed
-        else:
-            fold_into_packet(packet, parsed, collisions, name)
+    with _INGESTION_CLIENT_LOCK:
+        if client is not None:
+            import crucible_ingestion
+            crucible_ingestion.set_client(client)
+        for path in files:
+            name = os.path.basename(path)
+            parsed = parse(path, dsid, ingestor_name or None)
+            if parsed is None:
+                logger.warning(f'No ingestor supports {name}; skipping')
+                skipped.append(name)
+                continue
+            per_file.append({'file': name, 'ingestion_class': parsed.ingestion_class})
+            if packet is None:
+                packet = parsed
+            else:
+                fold_into_packet(packet, parsed, collisions, name)
     if packet is None:
         packet = IngestionPacket(unique_id=dsid, ingestion_class='')
     return packet, collisions, per_file, skipped
@@ -976,7 +1121,7 @@ def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str =
         holder_cfg = layout[i] if i < len(layout) else {}
         labels.append(holder_cfg.get('label', f'Holder {i + 1}'))
         slots = holder_cfg.get('slots', 8)
-        children = sorted(client.samples.list_children(uuid), key=lambda c: c.get('sample_name', ''))
+        children = sorted(_require_client().samples.list_children(uuid), key=lambda c: c.get('sample_name', ''))
         for j in range(slots):
             if j < len(children):
                 c = children[j]
@@ -996,8 +1141,8 @@ def resolve_holders(instrument: str, holder_uuids: list[str], layout_name: str =
 
 @task(retries=3, retry_delay_seconds=5)
 def task_request_post_processing(name: str, new_ds_dsid: str):
-    # name maps to client.datasets.request_<name>, e.g. "insitu_aggregation".
-    return getattr(client.datasets, f"request_{name}")(new_ds_dsid)
+    # name is a Crucible pipeline slug, e.g. "insitu_aggregation" or "carrier_segmentation".
+    return _require_client().datasets.postprocess(new_ds_dsid, name)
 
 
 def _run_post_processing(instrument_name: str, dsid: str):
@@ -1088,15 +1233,26 @@ def flow_upload_dataset(files: list,
                    kw_list: list[str] | None = None,
                    comments: str | None = None,
                    ingestor: str | None = None) -> str:
-    new_ds_dsid = task_create_dataset(files=files,
-                                 instrument_name=instrument_name,
-                                 project_id=project_id,
-                                 orcid=orcid,
-                                 session_name=session_name,
-                                 dsid=dsid,
-                                 kw_list=kw_list,
-                                 comments=comments,
-                                 ingestor=ingestor)
+    if dsid and dataset_exists(dsid):
+        new_ds_dsid = task_update_dataset(files=files,
+                                     dsid=dsid,
+                                     instrument_name=instrument_name,
+                                     project_id=project_id,
+                                     orcid=orcid,
+                                     session_name=session_name,
+                                     kw_list=kw_list,
+                                     comments=comments,
+                                     ingestor=ingestor)
+    else:
+        new_ds_dsid = task_create_dataset(files=files,
+                                     instrument_name=instrument_name,
+                                     project_id=project_id,
+                                     orcid=orcid,
+                                     session_name=session_name,
+                                     dsid=dsid,
+                                     kw_list=kw_list,
+                                     comments=comments,
+                                     ingestor=ingestor)
 
     task_link_dataset_to_session(new_ds_dsid, session_dsid)
     task_link_dataset_and_sample(new_ds_dsid, sample_unique_id)
@@ -1275,15 +1431,26 @@ def flow_multi_assignment_upload(file: str,
                    link_samples: bool = False) -> str:
     logger = get_run_logger()
 
-    new_dsid = task_create_dataset(files=[file],
-                              instrument_name=instrument_name,
-                              project_id=project_id,
-                              orcid=orcid,
-                              dsid=dsid,
-                              kw_list=kw_list,
-                              comments=comments,
-                              ingestor=ingestor,
-                              excluded_uuids=excluded_uuids)
+    if dsid and dataset_exists(dsid):
+        new_dsid = task_update_dataset(files=[file],
+                                  dsid=dsid,
+                                  instrument_name=instrument_name,
+                                  project_id=project_id,
+                                  orcid=orcid,
+                                  kw_list=kw_list,
+                                  comments=comments,
+                                  ingestor=ingestor,
+                                  excluded_uuids=excluded_uuids)
+    else:
+        new_dsid = task_create_dataset(files=[file],
+                                  instrument_name=instrument_name,
+                                  project_id=project_id,
+                                  orcid=orcid,
+                                  dsid=dsid,
+                                  kw_list=kw_list,
+                                  comments=comments,
+                                  ingestor=ingestor,
+                                  excluded_uuids=excluded_uuids)
     if link_samples and sample_uuids:
         task_link_dataset_and_sample(new_dsid, sample_uuids)
         logger.info(f"Linked {len(sample_uuids)} samples to dataset {new_dsid}")
@@ -1329,9 +1496,10 @@ def flow_photobox_upload(file: str,
                     sample_positions: dict | None = None) -> str:
     logger = get_run_logger()
 
+    c = _require_client()
     for tray_uuid in [tray1_uuid, tray2_uuid]:
         if tray_uuid:
-            client.samples.link(carrier_uuid, tray_uuid)
+            c.samples.link(carrier_uuid, tray_uuid)
             logger.info(f"Linked carrier {carrier_uuid} → tray {tray_uuid}")
 
     new_dsid = task_create_dataset(files=[file],
@@ -1394,16 +1562,63 @@ def flow_parent_child_upload(file: str,
     return parent_dsid
 
 
+_INGESTION_CLIENT_LOCK = threading.Lock()
+
+
+class _CompatDatasetsProxy:
+    """Adapter around DatasetOperations so crucible-ingestion 0.3.0's
+    `resp['dsid']` lookup works with nano-crucible 4.0.0's `dataset_mfid`
+    without mutating the shared `client.datasets` instance."""
+
+    def __init__(self, datasets):
+        self._datasets = datasets
+
+    def create(self, *args, **kwargs):
+        resp = self._datasets.create(*args, **kwargs)
+        if isinstance(resp, dict) and "dsid" not in resp:
+            created_rec = resp.get("created_record")
+            created_id = created_rec.get("unique_id") if isinstance(created_rec, dict) else None
+            resp = dict(resp)
+            resp["dsid"] = resp.get("dataset_mfid") or created_id
+        return resp
+
+    def __getattr__(self, name):
+        return getattr(self._datasets, name)
+
+
+class _CompatIngestionClientProxy:
+    def __init__(self, real_client):
+        self._client = real_client
+        datasets = getattr(real_client, "datasets", None)
+        self.datasets = _CompatDatasetsProxy(datasets) if datasets is not None else None
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
 @task(retries=2, retry_delay_seconds=5)
 def task_push_local_packet(packet) -> None:
+    c = _require_client()
+    import crucible_ingestion
     from crucible_ingestion import push_packet
-    push_packet(packet, include_file=False)
+
+    with _INGESTION_CLIENT_LOCK:
+        crucible_ingestion.set_client(_CompatIngestionClientProxy(c))
+        try:
+            push_packet(packet, include_file=False)
+        finally:
+            crucible_ingestion.set_client(c)
 
 
 @task(retries=2, retry_delay_seconds=5)
 def task_push_local_file(dsid: str, path: str, ingestion_class: str | None) -> None:
+    c = _require_client()
+    import crucible_ingestion
     from crucible_ingestion import push_file
-    push_file(dsid, path, ingestion_class)
+
+    with _INGESTION_CLIENT_LOCK:
+        crucible_ingestion.set_client(c)
+        push_file(dsid, path, ingestion_class)
 
 
 # Upload path for datasets the operator previewed and corrected locally. Preview wrote
@@ -1442,6 +1657,8 @@ def flow_preview_upload(files: list[str],
                        instrument_name=instrument_name, wait_for_ingestion=False)
 
     task_push_local_packet(packet)
+    if packet.dataset_fields.get('public') is True:
+        _require_client().datasets.set_public(dsid)
 
     # keyed by filename because that is what parse_for_preview recorded; same-named files
     # from different folders would collide

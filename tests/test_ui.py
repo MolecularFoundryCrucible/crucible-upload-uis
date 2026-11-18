@@ -1,13 +1,27 @@
 """Unit tests for crucible-tem-upload-ui."""
+import importlib.util
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch, MagicMock
+import requests
+
+# On a clean checkout without gitignored instrument_conf.py, load instrument_conf.default.py
+if "instrument_conf" not in sys.modules and importlib.util.find_spec("instrument_conf") is None:
+    _default_conf_path = Path(__file__).resolve().parent.parent / "instrument_conf.default.py"
+    _spec = importlib.util.spec_from_file_location("instrument_conf", _default_conf_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    assert _spec is not None and _spec.loader is not None
+    _spec.loader.exec_module(_mod)
+    sys.modules["instrument_conf"] = _mod
 
 # Patch module-level side effects before first import
 _mock_tk = MagicMock()
 _mock_crucible_client = MagicMock(api_key='test')
 
 with patch('tkinter.Tk', return_value=_mock_tk), \
-     patch('crucible.CrucibleClient', return_value=_mock_crucible_client):
+     patch('crucible.CrucibleClient', return_value=_mock_crucible_client), \
+     patch.object(requests.Session, 'send', side_effect=AssertionError("Real HTTP blocked during import")):
     import main
     import prefect_backend as pb
 
@@ -106,9 +120,13 @@ class TestApplySampleMetadata(unittest.TestCase):
 # ── prefect_backend.check_session_depth ──────────────────────────────────────
 
 class TestCheckSessionDepth(unittest.TestCase):
-    def test_raises_for_shallow_path(self):
+    def test_raises_for_root_path_at_default_depth(self):
         with self.assertRaises(ValueError):
-            pb.check_session_depth("/data")
+            pb.check_session_depth("/")
+
+    def test_raises_for_shallow_path_when_min_depth_is_2(self):
+        with self.assertRaises(ValueError):
+            pb.check_session_depth("/data", min_depth=2)
 
     def test_passes_for_deep_path(self):
         pb.check_session_depth("/data/sessions/2024/mysession")  # should not raise
@@ -145,6 +163,18 @@ class TestAzureAvailable(unittest.TestCase):
 
 class TestFlaskRoutes(unittest.TestCase):
     def setUp(self):
+        self._http_patcher = patch.object(
+            requests.Session,
+            "send",
+            side_effect=AssertionError("Hermetic unit test attempted real HTTP request"),
+        )
+        self._http_patcher.start()
+        self.addCleanup(self._http_patcher.stop)
+
+        self._client_patcher = patch.object(pb, "client", MagicMock(api_key="test"))
+        self.mock_pb_client = self._client_patcher.start()
+        self.addCleanup(self._client_patcher.stop)
+
         self.client = main.app.test_client()
 
     def test_user_lookup_missing_email_returns_400(self):
@@ -156,13 +186,14 @@ class TestFlaskRoutes(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_upload_unconfigured_instrument_returns_400(self):
-        # "themis" is in INSTRUMENTS but not in INSTRUMENT_FLOWS
-        resp = self.client.post('/api/upload', json={
-            "orcid": "0000-0001-2345-6789",
-            "project_id": "MFP00001",
-            "instrument_name": "themis",
-            "session_folder_path": "/data/sessions/test",
-        })
+        with patch.dict(main.registry.INSTRUMENT_FLOWS, {"themis": None}), \
+             patch.object(pb, "create_session", side_effect=AssertionError("create_session must not run")):
+            resp = self.client.post('/api/upload', json={
+                "orcid": "0000-0001-2345-6789",
+                "project_id": "MFP00001",
+                "instrument_name": "themis",
+                "session_folder_path": "/data/sessions/test",
+            })
         self.assertEqual(resp.status_code, 400)
         self.assertIn("No upload flow configured", resp.get_json()["error"])
 

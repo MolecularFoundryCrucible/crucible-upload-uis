@@ -91,11 +91,26 @@ def _drain(q: queue.Queue):
             return
 
 
+DEFAULT_CRUCIBLE_HUB_URL = "https://crucible.lbl.gov/hub"
+
+
+def _get_crucible_hub_url() -> str:
+    env_url = os.environ.get("CRUCIBLE_HUB_URL", "").strip()
+    if env_url:
+        return env_url.rstrip("/")
+    try:
+        from crucible.config import get_hub_url
+        return (get_hub_url() or DEFAULT_CRUCIBLE_HUB_URL).rstrip("/")
+    except Exception:
+        return DEFAULT_CRUCIBLE_HUB_URL
+
+
 @app.get("/")
 def index():
     return render_template("index.html",
                            print_barcode_enabled=bool(conf.PRINTER_ID),
                            crucible_version=crucible.__version__,
+                           crucible_hub_url=_get_crucible_hub_url(),
                            panel_templates=registry.PANEL_TEMPLATES,
                            holder_layouts=registry.INSTRUMENT_HOLDER_LAYOUTS)
 
@@ -812,7 +827,7 @@ def resolve_children():
     if not sample_uuid:
         return jsonify({"error": "sample_uuid required"}), 400
     try:
-        children = backend.client.samples.list_children(sample_uuid)
+        children = backend._require_client().samples.list_children(sample_uuid)
         result = sorted(
             [{"unique_id": c["unique_id"], "sample_name": c.get("sample_name", "")} for c in children],
             key=lambda x: x["sample_name"],
@@ -844,7 +859,7 @@ def resolve_holders():
 def _next_carrier_name(project_id: str) -> str:
     # limit=None to page past the default 100: missing the highest CARnnnnnn would
     # hand back an already-used name. Names are zero-padded, so sorting is numeric.
-    existing = backend.client.samples.list(
+    existing = backend._require_client().samples.list(
         project_id=project_id, sample_type="thin film carrier", limit=None
     )
     names = sorted(s["sample_name"] for s in existing if s.get("sample_name"))

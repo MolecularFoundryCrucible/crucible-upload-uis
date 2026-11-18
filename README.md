@@ -20,7 +20,7 @@ Depending on how the app is configured (see `IS_SESSION` under [Additional Detai
 
 In all modes, uploaded datasets are linked to the provided sample(s), user, and project_id. 
 
-Once data is uploaded, it can be viewed in the [Crucible Web Explorer](https://crucible.lbl.gov/explore)!
+Once data is uploaded, it can be viewed in the [Crucible Hub](https://crucible.lbl.gov/hub)!
 
 
 ### Prerequisites
@@ -96,7 +96,7 @@ Once started, the app opens a browser window at `http://localhost:5000` (the bro
    - Browse for **one or more files** (file mode) — each becomes its own standalone dataset.
 7. **Submit** — a Prefect flow run is kicked off per dataset (or per session). Progress and the resulting Crucible link/QR code are shown in the UI as uploads complete; you can also watch the raw flow runs in the Prefect UI at http://127.0.0.1:4200.
 
-Once uploaded, datasets are linked to the sample(s), user, and project, and can be viewed in the [Crucible Web Explorer](https://crucible.lbl.gov/explore).
+Once uploaded, datasets are linked to the sample(s), user, and project, and can be viewed in the [Crucible Hub](https://crucible.lbl.gov/hub).
 
 Some instruments (`UI_MODE = 'preview'`) show a **Preview upload** button instead of Submit: it lets you see the metadata the ingestor parsed from your file(s) before anything is written to Crucible, correct any fields, and only then confirm the upload. This mode isn't available in session mode.
 

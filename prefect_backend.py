@@ -592,6 +592,139 @@ def task_identify_session_files(session_folder_path: str, instrument_name: str) 
     ]
 
 
+def _manifest_sibling(xml_path: Path, reference: str | None) -> Path:
+    """Resolve one Attolight manifest entry exactly where the ingestor expects it.
+
+    The current ingestor uses Path.with_name(), so manifest entries must be simple
+    filenames beside the XML, not absolute paths or paths into another directory.
+    """
+    reference = (reference or '').strip()
+    if not reference or Path(reference).name != reference or reference in {'.', '..'}:
+        raise ValueError(
+            f"Attolight manifest {xml_path.name!r} contains an invalid file reference "
+            f"{reference!r}; expected a filename beside the XML"
+        )
+    path = xml_path.parent / reference
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Attolight manifest {str(xml_path)!r} references missing file {str(path)!r}"
+        )
+    if path.stat().st_size >= 20 * 1024 ** 3:
+        raise ValueError(f"Attolight manifest file {str(path)!r} exceeds the 20 GiB session limit")
+    return path
+
+
+def _session_path_key(path: str | Path) -> str:
+    """Stable key for matching claimed files on case-insensitive lab PCs too."""
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def plan_spectre_session_files(session_files: list[str]) -> dict[str, list]:
+    """Split a SPECTRE session into XML groups, standalone SUR and ordinary files.
+
+    Only an AttolightWorkspace XML manifest claims its sibling TXT and SUR files. A
+    nearby TXT never implicitly belongs to a SUR file. This is a pure preflight: all
+    manifests are validated and all duplicate ownership is reported before any child
+    flow is submitted.
+    """
+    import xml.etree.ElementTree as ET
+
+    paths = [Path(p) for p in session_files]
+    groups = []
+    claimed: dict[str, Path] = {}
+    grouped_xml_keys = set()
+    group_names: dict[str, Path] = {}
+
+    for xml_path in sorted((p for p in paths if p.suffix.lower() == '.xml'), key=str):
+        try:
+            root = ET.parse(xml_path).getroot()
+        except ET.ParseError:
+            # Other XML formats retain the ordinary session-file behavior. An XML that
+            # is malformed is likewise left to normal ingestor detection and diagnostics.
+            continue
+        if root.tag != 'AttolightWorkspace':
+            continue
+
+        if xml_path.name in group_names:
+            raise ValueError(
+                f"Duplicate Attolight group name {xml_path.name!r}: "
+                f"{group_names[xml_path.name]} and {xml_path}"
+            )
+        group_names[xml_path.name] = xml_path
+        grouped_xml_keys.add(_session_path_key(xml_path))
+
+        files_node = root.find('Files')
+        if files_node is None:
+            raise ValueError(f"Attolight manifest {str(xml_path)!r} has no <Files> element")
+
+        txt_files = []
+        sur_files = []
+        local_keys = set()
+        for node in files_node:
+            reference = (node.text or '').strip()
+            if Path(reference).suffix.lower() not in {'.txt', '.sur'}:
+                continue
+            path = _manifest_sibling(xml_path, reference)
+            key = _session_path_key(path)
+            if key in local_keys:
+                raise ValueError(f"Attolight manifest {str(xml_path)!r} references {path.name!r} more than once")
+            local_keys.add(key)
+            if key in claimed:
+                raise ValueError(
+                    f"File {str(path)!r} is claimed by both {claimed[key]!s} and {xml_path!s}"
+                )
+            claimed[key] = xml_path
+            if path.suffix.lower() == '.txt':
+                txt_files.append(path)
+            else:
+                sur_files.append(path)
+
+        if len(txt_files) != 1:
+            raise ValueError(
+                f"Attolight manifest {str(xml_path)!r} must reference exactly one TXT file; "
+                f"found {len(txt_files)}"
+            )
+        if len({p.name for p in sur_files}) != len(sur_files):
+            raise ValueError(f"Attolight group {xml_path.name!r} has duplicate SUR dataset names")
+
+        groups.append({
+            'xml': str(xml_path),
+            'txt': str(txt_files[0]),
+            'sur_files': [str(p) for p in sur_files],
+        })
+
+    standalone_sur = [
+        str(p) for p in paths
+        if p.suffix.lower() == '.sur' and _session_path_key(p) not in claimed
+    ]
+    ordinary_files = [
+        str(p) for p in paths
+        if p.suffix.lower() != '.sur'
+        and _session_path_key(p) not in claimed
+        and _session_path_key(p) not in grouped_xml_keys
+    ]
+    return {
+        'groups': groups,
+        'standalone_sur': standalone_sur,
+        'ordinary_files': ordinary_files,
+    }
+
+
+def _session_files_with_companions(file_path: str) -> list[str]:
+    """Primary file plus the companions used by the generic session flow."""
+    files = [file_path]
+    path = Path(file_path)
+    if file_path.endswith('ser'):
+        files.append(get_emi_file_name(path))
+    if path.suffix.lower() == '.mrc':
+        rawtlt = path.with_suffix('.rawtlt')
+        if rawtlt.exists():
+            files.append(str(rawtlt))
+        fei_parameters = path.with_suffix('.txt')
+        if fei_parameters.exists():
+            files.append(str(fei_parameters))
+    return files
+
 
 def _compute_sha256(file_path: str) -> str:
     import hashlib
@@ -1267,85 +1400,14 @@ def flow_upload_dataset(files: list,
 
     return new_ds_dsid
 
-# flow to upload a session of files (folder → parent dataset + child per file)
-@flow(name="session-upload", flow_run_name=_run_name("session"))
-def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
-                       sample_unique_id: str | None = None, session_dsid: str | None = None,
-                       kw_list: list[str] | None = None, comments: str | None = None,
-                       ingestor: str | None = None) -> str:
+def _wait_for_session_children(child_runs: list, logger) -> None:
+    """Wait for session children without hiding their failures from the log."""
     import time
-    import os
     import requests as req
-    from prefect.deployments import run_deployment
-    logger = get_run_logger()
-    kw_list = kw_list or []
 
-    session_folder_path = file
-
-    check_session_depth(session_folder_path)
-
-    session_name, session_dsid = create_session(
-        session_folder_path, kw_list, comments or "",
-        orcid, project_id, instrument_name, sample_unique_id,
-        session_dsid=session_dsid)
-
-    # returns list of files in folder path that are less than 20GB
-    # with an accepted file type
-    session_files = task_identify_session_files(session_folder_path, instrument_name)
-    logger.info(f'{session_files=}')
-
-    valid_dsids = child_dsids(session_dsid)
-    logger.info(f"Found {len(valid_dsids)} existing datasets in this session")
-
-    resolved = resolve_dsids_parallel(session_files, valid_dsids)
-
-    # Submit all child flows in parallel (timeout=0 returns immediately)
-    child_runs = []
-    for f, (dsid, existed) in zip(session_files, resolved):
-        time.sleep(0.3)
-        dsfiles = [f]
-        f_path = Path(f)
-
-        if f.endswith('ser'):
-            dsfiles.append(get_emi_file_name(f_path))
-
-        # Add extra files for FEI MRC tomography datasets: .rawtlt and .txt (FEI parameters)
-        if f_path.suffix.lower() == '.mrc':
-            rawtltName = f_path.with_suffix('.rawtlt')
-            if rawtltName.exists():
-                dsfiles.append(str(rawtltName))
-
-            FEIparameters = f_path.with_suffix('.txt')
-            if FEIparameters.exists():
-                dsfiles.append(str(FEIparameters))
-
-        logger.info(f"{Path(f).name}: {'reusing existing' if existed else 'new'} dsid {dsid}")
-
-        run = run_deployment(
-            "upload-dataset/upload-dataset",
-            parameters={
-                "files": dsfiles,
-                "dsid": dsid,
-                "instrument_name": instrument_name,
-                "project_id": project_id,
-                "orcid": orcid,
-                "session_name": session_name,
-                "session_dsid": session_dsid,
-                "sample_unique_id": sample_unique_id,
-                "kw_list": kw_list,
-                "comments": comments,
-                "ingestor": ingestor,
-            },
-            timeout=0,
-        )
-        child_runs.append(run)
-        logger.info(f"Submitted child flow for {Path(f).name}: {run.id}")
-
-    # Wait for all children to reach a terminal state
     terminal_states = {"COMPLETED", "FAILED", "CRASHED", "CANCELLED"}
     pending = {str(r.id) for r in child_runs}
     failed = []
-
     api_url = os.environ.get("PREFECT_API_URL", "http://127.0.0.1:4200/api")
     session = req.Session()
 
@@ -1371,6 +1433,165 @@ def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid:
     if failed:
         logger.error(f"{len(failed)} child flow(s) failed. Retry them from the Prefect UI.")
 
+
+def _run_session_children(child_specs: list[dict], session_dsid: str, session_name: str,
+                          instrument_name: str, project_id: str, orcid: str,
+                          sample_unique_id: str | None, kw_list: list[str],
+                          comments: str | None) -> None:
+    """Resolve and submit prepared session children, then observe all their runs.
+
+    Each spec has a primary_file used for SHA-based reuse, a files list and an ingestor.
+    The dedicated Attolight deployment additionally receives its sur_files list.
+    """
+    import time
+    from prefect.deployments import run_deployment
+
+    logger = get_run_logger()
+    valid_dsids = child_dsids(session_dsid)
+    logger.info(f"Found {len(valid_dsids)} existing datasets in this session")
+    resolved = resolve_dsids_parallel([s['primary_file'] for s in child_specs], valid_dsids)
+
+    child_runs = []
+    for spec, (dsid, existed) in zip(child_specs, resolved):
+        time.sleep(0.3)
+        primary_file = spec['primary_file']
+        logger.info(f"{Path(primary_file).name}: {'reusing existing' if existed else 'new'} dsid {dsid}")
+        parameters = {
+            "files": spec['files'],
+            "dsid": dsid,
+            "instrument_name": instrument_name,
+            "project_id": project_id,
+            "orcid": orcid,
+            "session_name": session_name,
+            "session_dsid": session_dsid,
+            "sample_unique_id": sample_unique_id,
+            "kw_list": kw_list,
+            "comments": comments,
+            "ingestor": spec['ingestor'],
+        }
+        if 'sur_files' in spec:
+            parameters['sur_files'] = spec['sur_files']
+        run = run_deployment(
+            spec.get('deployment', "upload-dataset/upload-dataset"),
+            parameters=parameters,
+            timeout=0,
+        )
+        child_runs.append(run)
+        logger.info(f"Submitted child flow for {Path(primary_file).name}: {run.id}")
+
+    _wait_for_session_children(child_runs, logger)
+
+
+@flow(name="attolight-group-upload", flow_run_name=_run_name("attolight-group"))
+def flow_attolight_group_upload(files: list[str], sur_files: list[str],
+                                instrument_name: str, project_id: str, orcid: str,
+                                session_name: str | None = None,
+                                session_dsid: str | None = None, dsid: str | None = None,
+                                sample_unique_id: str | None = None,
+                                kw_list: list[str] | None = None, comments: str | None = None,
+                                ingestor: str | None = None) -> str:
+    """Create one XML/TXT group and its SUR children from a locally parsed packet.
+
+    AttolightCLIngestor needs every manifest sibling on the local filesystem. The packet
+    push creates the SUR children; task_parse_attolight_group supplies their source paths
+    and sample links, which the current external ingestor does not yet include itself.
+    """
+    if len(files) != 2 or Path(files[0]).suffix.lower() != '.xml' or Path(files[1]).suffix.lower() != '.txt':
+        raise ValueError("Attolight group files must be exactly [XML, TXT]")
+
+    new_ds_dsid = dsid
+    if not dsid or not dataset_exists(dsid):
+        new_ds_dsid = task_create_dataset(
+            files=[], dsid=dsid, instrument_name=instrument_name, project_id=project_id,
+            orcid=orcid, session_name=session_name, kw_list=kw_list or [], comments=comments,
+            dataset_name=Path(files[0]).name, wait_for_ingestion=False,
+        )
+
+    packet = task_parse_attolight_group(files[0], new_ds_dsid, sur_files, sample_unique_id)
+    task_push_local_packet(packet)
+    for path in files:
+        task_push_local_file(new_ds_dsid, path, packet.ingestion_class)
+
+    task_link_dataset_to_session(new_ds_dsid, session_dsid)
+    task_link_dataset_and_sample(new_ds_dsid, sample_unique_id)
+    _run_post_processing(instrument_name, new_ds_dsid)
+    return new_ds_dsid
+
+
+# SPECTRE mixes Attolight XML groups and standalone SUR files in one session. The
+# grouping decision belongs here rather than in Flask or the single global ingestor
+# dropdown: every file is routed independently after the local manifests are preflighted.
+@flow(name="spectre-session-upload", flow_run_name=_run_name("spectre-session"))
+def flow_spectre_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
+                                sample_unique_id: str | None = None, session_dsid: str | None = None,
+                                kw_list: list[str] | None = None, comments: str | None = None,
+                                ingestor: str | None = None) -> str:
+    logger = get_run_logger()
+    kw_list = kw_list or []
+    check_session_depth(file)
+    session_files = task_identify_session_files(file, instrument_name)
+    plan = plan_spectre_session_files(session_files)
+    logger.info(
+        f"SPECTRE session plan: {len(plan['groups'])} XML group(s), "
+        f"{len(plan['standalone_sur'])} standalone SUR file(s), "
+        f"{len(plan['ordinary_files'])} ordinary file(s)"
+    )
+
+    session_name, session_dsid = create_session(
+        file, kw_list, comments or "", orcid, project_id, instrument_name,
+        sample_unique_id, session_dsid=session_dsid,
+    )
+
+    child_specs = []
+    for group in plan['groups']:
+        child_specs.append({
+            'primary_file': group['xml'],
+            'files': [group['xml'], group['txt']],
+            'sur_files': group['sur_files'],
+            'ingestor': 'AttolightCLIngestor',
+            'deployment': 'attolight-group-upload/attolight-group-upload',
+        })
+    for path in plan['standalone_sur']:
+        child_specs.append({
+            'primary_file': path,
+            'files': [path],
+            'ingestor': 'SurIngestor',
+        })
+    for path in plan['ordinary_files']:
+        child_specs.append({
+            'primary_file': path,
+            'files': _session_files_with_companions(path),
+            'ingestor': ingestor,
+        })
+
+    _run_session_children(child_specs, session_dsid, session_name, instrument_name,
+                          project_id, orcid, sample_unique_id, kw_list, comments)
+    return session_dsid
+
+
+# flow to upload a session of files (folder → parent dataset + child per file)
+@flow(name="session-upload", flow_run_name=_run_name("session"))
+def flow_session_upload(file: str, instrument_name: str, project_id: str, orcid: str,
+                       sample_unique_id: str | None = None, session_dsid: str | None = None,
+                       kw_list: list[str] | None = None, comments: str | None = None,
+                       ingestor: str | None = None) -> str:
+    logger = get_run_logger()
+    kw_list = kw_list or []
+
+    check_session_depth(file)
+    session_name, session_dsid = create_session(
+        file, kw_list, comments or "", orcid, project_id, instrument_name,
+        sample_unique_id, session_dsid=session_dsid,
+    )
+
+    session_files = task_identify_session_files(file, instrument_name)
+    logger.info(f'{session_files=}')
+    child_specs = [
+        {'primary_file': path, 'files': _session_files_with_companions(path), 'ingestor': ingestor}
+        for path in session_files
+    ]
+    _run_session_children(child_specs, session_dsid, session_name, instrument_name,
+                          project_id, orcid, sample_unique_id, kw_list, comments)
     return session_dsid
 
 
@@ -1600,6 +1821,56 @@ class _CompatIngestionClientProxy:
 
     def __getattr__(self, name):
         return getattr(self._client, name)
+
+
+@task
+def task_parse_attolight_group(xml_file: str, dsid: str, sur_files: list[str],
+                               sample_unique_id: str | list[str] | None = None):
+    """Parse an Attolight group locally and finish its transport-only packet fields.
+
+    The ingestor owns scientific parsing and child metadata. The uploader already knows
+    the local manifest paths and session-level sample selection, so it supplies those
+    here rather than duplicating XML or SUR scientific parsing in this repository.
+    """
+    from crucible_ingestion.data_ingestion import parse
+
+    c = _require_client()
+    with _INGESTION_CLIENT_LOCK:
+        import crucible_ingestion
+        crucible_ingestion.set_client(c)
+        packet = parse(xml_file, dsid, "AttolightCLIngestor")
+    if packet is None:
+        raise ValueError(f"File {xml_file!r} not supported by AttolightCLIngestor")
+    if packet.ingestion_class != 'AttolightCLIngestor':
+        raise ValueError(
+            f"AttolightCLIngestor was requested for {xml_file!r}, but "
+            f"{packet.ingestion_class!r} handled it instead"
+        )
+
+    children = packet.children or []
+    if len(children) != len(sur_files):
+        raise RuntimeError(
+            f"Attolight parser produced {len(children)} SUR children for {xml_file!r}; "
+            f"the manifest preflight expected {len(sur_files)}"
+        )
+    if len({Path(p).name for p in sur_files}) != len(sur_files):
+        raise ValueError(f"Attolight group {xml_file!r} contains duplicate SUR filenames")
+
+    sample_ids = ([sample_unique_id] if isinstance(sample_unique_id, str)
+                  else list(sample_unique_id or []))
+    for path in sur_files:
+        filename = Path(path).name
+        matches = [c for c in children if c.get('dataset', {}).get('dataset_name') == filename]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Attolight parser did not produce exactly one child named {filename!r} "
+                f"for manifest {xml_file!r}"
+            )
+        matches[0]['files_to_upload'] = [path]
+        matches[0]['sample_links'] = list(dict.fromkeys(
+            list(matches[0].get('sample_links') or []) + sample_ids
+        ))
+    return packet
 
 
 @task(retries=2, retry_delay_seconds=5)
